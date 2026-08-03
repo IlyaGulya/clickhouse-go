@@ -21,21 +21,31 @@ import (
 type Conn = driver.Conn
 
 type (
-	Progress      = proto.Progress
-	Exception     = proto.Exception
-	ProfileInfo   = proto.ProfileInfo
-	ServerVersion = proto.ServerHandshake
-	BorrowedBytes = column.BorrowedBytes
+	Progress       = proto.Progress
+	Exception      = proto.Exception
+	ProfileInfo    = proto.ProfileInfo
+	ServerVersion  = proto.ServerHandshake
+	BorrowedBytes  = column.BorrowedBytes
+	BorrowedColumn = column.BorrowedBytesColumn
 )
 
-// BorrowBytes marks v as caller-owned String data that a batch may reference
-// without copying while it is assembled and encoded. The caller must not
-// mutate or reuse v until Send returns. If the batch is not sent, v must remain
-// immutable until Abort or Close returns. Use a plain []byte when that lifetime
-// cannot be guaranteed. Native batches retain appended values so they can be
-// sent again; each subsequent Send observes the current contents of v.
+// BorrowBytes marks v as caller-owned String data.
+// The batch can use v without a copy during assembly and encoding.
+// Do not change or reuse v until Send returns.
+// If you do not send the batch, do not change v until Abort or Close returns.
+// Use []byte if you cannot keep v unchanged for this period.
+// A Native batch keeps appended values for another Send.
+// Each Send reads the current data in v.
 func BorrowBytes(v []byte) BorrowedBytes {
 	return BorrowedBytes(v)
+}
+
+// BorrowBytesColumn marks all values in a String column as caller-owned.
+// It does not copy the [][]byte slice or its values.
+// Pass the result to Batch.Column(i).Append.
+// The lifetime rules for BorrowBytes also apply.
+func BorrowBytesColumn(v [][]byte) BorrowedColumn {
+	return BorrowedColumn(v)
 }
 
 var (

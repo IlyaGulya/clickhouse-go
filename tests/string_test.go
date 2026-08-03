@@ -159,6 +159,101 @@ func TestBorrowedStringCompressionBufferLimit(t *testing.T) {
 	require.True(t, bytes.Equal(payload, actual))
 }
 
+func TestBorrowedStringMixedAndColumnar(t *testing.T) {
+	TestProtocols(t, func(t *testing.T, protocol clickhouse.Protocol) {
+		conn, err := GetNativeConnection(t, protocol, nil, nil, &clickhouse.Compression{
+			Method: clickhouse.CompressionLZ4,
+		})
+		require.NoError(t, err)
+
+		ctx := context.Background()
+		const table = "test_borrowed_string_mixed"
+		require.NoError(t, conn.Exec(ctx, `
+			CREATE TABLE test_borrowed_string_mixed (
+				sequence UInt8,
+				value String,
+				low_cardinality LowCardinality(String)
+			) Engine MergeTree() ORDER BY sequence
+		`))
+		t.Cleanup(func() {
+			require.NoError(t, conn.Exec(ctx, "DROP TABLE IF EXISTS "+table))
+		})
+
+		batch, err := conn.PrepareBatch(ctx, "INSERT INTO "+table)
+		require.NoError(t, err)
+		require.NoError(t, batch.Append(uint8(1), "owned-first", "same"))
+		require.NoError(t, batch.Append(
+			uint8(2),
+			clickhouse.BorrowBytes([]byte("borrowed-middle")),
+			clickhouse.BorrowBytes([]byte("same")),
+		))
+		require.NoError(t, batch.Append(uint8(3), "owned-last", "same"))
+		require.NoError(t, batch.Send())
+
+		columnar, err := conn.PrepareBatch(ctx, "INSERT INTO "+table)
+		require.NoError(t, err)
+		require.NoError(t, columnar.Column(0).Append([]uint8{4, 5}))
+		require.NoError(t, columnar.Column(1).Append(clickhouse.BorrowBytesColumn([][]byte{
+			[]byte("column-first"),
+			[]byte("column-second"),
+		})))
+		require.NoError(t, columnar.Column(2).Append(clickhouse.BorrowBytesColumn([][]byte{
+			[]byte("column-low-cardinality"),
+			[]byte("column-low-cardinality"),
+		})))
+		require.NoError(t, columnar.Send())
+
+		rows, err := conn.Query(ctx, "SELECT sequence, value, low_cardinality FROM "+table+" ORDER BY sequence")
+		require.NoError(t, err)
+		defer rows.Close()
+		expected := []struct {
+			sequence       uint8
+			value          string
+			lowCardinality string
+		}{
+			{1, "owned-first", "same"},
+			{2, "borrowed-middle", "same"},
+			{3, "owned-last", "same"},
+			{4, "column-first", "column-low-cardinality"},
+			{5, "column-second", "column-low-cardinality"},
+		}
+		for _, want := range expected {
+			require.True(t, rows.Next())
+			var sequence uint8
+			var value string
+			var lowCardinality string
+			require.NoError(t, rows.Scan(&sequence, &value, &lowCardinality))
+			require.Equal(t, want.sequence, sequence)
+			require.Equal(t, want.value, value)
+			require.Equal(t, want.lowCardinality, lowCardinality)
+		}
+		require.False(t, rows.Next())
+		require.NoError(t, rows.Err())
+	})
+}
+
+func TestBorrowedStringUncompressedNative(t *testing.T) {
+	conn, err := GetNativeConnection(t, clickhouse.Native, nil, nil, nil)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	const table = "test_borrowed_string_uncompressed"
+	require.NoError(t, conn.Exec(ctx, "CREATE TABLE "+table+" (value String) Engine MergeTree() ORDER BY tuple()"))
+	t.Cleanup(func() {
+		require.NoError(t, conn.Exec(ctx, "DROP TABLE IF EXISTS "+table))
+	})
+
+	payload := makeBorrowedRandomPayload(4 << 20)
+	batch, err := conn.PrepareBatch(ctx, "INSERT INTO "+table)
+	require.NoError(t, err)
+	require.NoError(t, batch.Append(clickhouse.BorrowBytes(payload)))
+	require.NoError(t, batch.Send())
+
+	var actual []byte
+	require.NoError(t, conn.QueryRow(ctx, "SELECT value FROM "+table).Scan(&actual))
+	require.True(t, bytes.Equal(payload, actual))
+}
+
 func makeBorrowedRandomPayload(size int) []byte {
 	payload := make([]byte, size)
 	state := uint64(0x9e3779b97f4a7c15)

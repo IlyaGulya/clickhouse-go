@@ -29,12 +29,16 @@ const (
 	stringInputBorrowed
 )
 
-// BorrowedBytes is an opt-in String value that remains owned by the caller.
-// Unlike []byte, appending BorrowedBytes does not copy its contents into the
-// column buffer. The caller must keep the underlying bytes immutable until the
-// enclosing batch's Send returns, or until Abort or Close returns if the batch
-// is not sent. A Native batch may retain the value for a later Send.
+// BorrowedBytes is a String value that the caller owns.
+// Append does not copy BorrowedBytes data to the column buffer.
+// Do not change the data until the batch Send returns.
+// If you do not send the batch, do not change the data until Abort or Close returns.
+// A Native batch can keep the value for another Send.
 type BorrowedBytes []byte
+
+// BorrowedBytesColumn contains a column of BorrowedBytes values.
+// A conversion from [][]byte does not copy the slice or its values.
+type BorrowedBytesColumn [][]byte
 
 func (col *String) Reset() {
 	col.col.Reset()
@@ -196,10 +200,17 @@ func (col *String) AppendRow(v any) error {
 }
 
 func (col *String) selectInputMode(mode stringInputMode) error {
-	if col.inputMode != stringInputUndecided && col.inputMode != mode {
-		return fmt.Errorf("clickhouse: cannot mix borrowed and owned String values in one column")
-	}
 	if col.inputMode == mode {
+		return nil
+	}
+	if mode == stringInputOwned && col.inputMode == stringInputBorrowed {
+		return nil
+	}
+	if mode == stringInputBorrowed && col.inputMode == stringInputOwned {
+		for i := range col.col.Rows() {
+			col.borrowed.Append(col.col.RowBytes(i))
+		}
+		col.inputMode = stringInputBorrowed
 		return nil
 	}
 	col.inputMode = mode
@@ -223,6 +234,9 @@ func (col *String) appendOwnedString(v string) error {
 		return err
 	}
 	col.col.Append(v)
+	if col.inputMode == stringInputBorrowed {
+		col.borrowed.Append(col.col.RowBytes(col.col.Rows() - 1))
+	}
 	return nil
 }
 
@@ -235,6 +249,9 @@ func (col *String) appendOwnedBytes(v []byte) error {
 		return err
 	}
 	col.col.AppendBytes(v)
+	if col.inputMode == stringInputBorrowed {
+		col.borrowed.Append(col.col.RowBytes(col.col.Rows() - 1))
+	}
 	return nil
 }
 
@@ -275,22 +292,22 @@ func (col *String) finalizeInputMode() {
 func (col *String) Append(v any) (nulls []uint8, err error) {
 	switch v := v.(type) {
 	case []string:
-		if err := col.selectInputMode(stringInputOwned); err != nil {
-			return nil, err
-		}
-		col.col.AppendArr(v)
 		nulls = make([]uint8, len(v))
-	case []*string:
-		if err := col.selectInputMode(stringInputOwned); err != nil {
-			return nil, err
+		for i := range v {
+			if err := col.appendOwnedString(v[i]); err != nil {
+				return nil, err
+			}
 		}
+	case []*string:
 		nulls = make([]uint8, len(v))
 		for i := range v {
 			switch {
 			case v[i] != nil:
-				col.col.Append(*v[i])
+				if err := col.appendOwnedString(*v[i]); err != nil {
+					return nil, err
+				}
 			default:
-				col.col.Append("")
+				col.appendEmpty()
 				nulls[i] = 1
 			}
 		}
@@ -312,45 +329,46 @@ func (col *String) Append(v any) (nulls []uint8, err error) {
 			}
 		}
 	case []json.RawMessage:
-		if err := col.selectInputMode(stringInputOwned); err != nil {
-			return nil, err
-		}
 		nulls = make([]uint8, len(v))
 		for i := range v {
-			col.col.Append(string(v[i]))
+			if err := col.appendOwnedBytes(v[i]); err != nil {
+				return nil, err
+			}
 		}
 	case []*json.RawMessage:
-		if err := col.selectInputMode(stringInputOwned); err != nil {
-			return nil, err
-		}
 		nulls = make([]uint8, len(v))
 		for i := range v {
-			col.col.Append(string(*v[i]))
+			if err := col.appendOwnedBytes(*v[i]); err != nil {
+				return nil, err
+			}
 		}
 	case []byte:
-		if err := col.selectInputMode(stringInputOwned); err != nil {
-			return nil, err
-		}
 		nulls = make([]uint8, len(v))
 		for i := range v {
-			col.col.Append(string(v[i]))
+			if err := col.appendOwnedString(string(v[i])); err != nil {
+				return nil, err
+			}
 		}
 	case []*byte:
-		if err := col.selectInputMode(stringInputOwned); err != nil {
-			return nil, err
-		}
 		nulls = make([]uint8, len(v))
 		for i := range v {
-			col.col.Append(string(*v[i]))
+			if err := col.appendOwnedString(string(*v[i])); err != nil {
+				return nil, err
+			}
 		}
 	case [][]byte:
-		if err := col.selectInputMode(stringInputOwned); err != nil {
+		nulls = make([]uint8, len(v))
+		for i := range v {
+			if err := col.appendOwnedBytes(v[i]); err != nil {
+				return nil, err
+			}
+		}
+	case BorrowedBytesColumn:
+		if err := col.selectInputMode(stringInputBorrowed); err != nil {
 			return nil, err
 		}
 		nulls = make([]uint8, len(v))
-		for i := range v {
-			col.col.Append(string(v[i]))
-		}
+		col.borrowed.AppendArr(v)
 	case []BorrowedBytes:
 		if err := col.selectInputMode(stringInputBorrowed); err != nil {
 			return nil, err
@@ -411,8 +429,9 @@ func (col *String) Encode(buffer *proto.Buffer) {
 	col.col.EncodeColumn(buffer)
 }
 
-// Write streams String input into writer. Borrowed mode chains caller-owned
-// values directly; owned mode preserves the existing ColStr behavior.
+// Write sends String input to writer.
+// In borrowed mode, it chains caller-owned values without a copy.
+// In owned mode, it uses ColStr.
 func (col *String) Write(writer *proto.Writer) {
 	col.finalizeInputMode()
 	if col.inputMode == stringInputBorrowed {

@@ -37,11 +37,12 @@ const sharedDictionariesWithAdditionalKeys = 1
 // https://github.com/ClickHouse/ClickHouse/blob/master/src/Columns/ColumnLowCardinality.cpp
 // https://github.com/ClickHouse/clickhouse-cpp/blob/master/clickhouse/columns/lowcardinality.cpp
 type LowCardinality struct {
-	key      byte
-	rows     int
-	index    Interface
-	chType   Type
-	nullable bool
+	key          byte
+	rows         int
+	index        Interface
+	chType       Type
+	nullable     bool
+	stringValues bool
 
 	keys8  UInt8
 	keys16 UInt16
@@ -49,17 +50,19 @@ type LowCardinality struct {
 	keys64 UInt64
 
 	append struct {
-		keys          []int
-		index         map[any]int
-		borrowedIndex map[uint64][]borrowedLowCardinalityEntry
-		hashSeed      maphash.Seed
+		keys        []int
+		index       map[any]int
+		stringIndex map[uint64][]lowCardinalityStringEntry
+		hashSeed    maphash.Seed
 	}
 	name string
 }
 
-type borrowedLowCardinalityEntry struct {
-	value []byte
-	index int
+type lowCardinalityStringEntry struct {
+	borrowed bool
+	bytes    []byte
+	owned    string
+	index    int
 }
 
 func (col *LowCardinality) Reset() {
@@ -70,7 +73,7 @@ func (col *LowCardinality) Reset() {
 	col.keys32.Reset()
 	col.keys64.Reset()
 	col.append.index = make(map[any]int)
-	col.append.borrowedIndex = make(map[uint64][]borrowedLowCardinalityEntry)
+	col.append.stringIndex = make(map[uint64][]lowCardinalityStringEntry)
 	col.append.keys = col.append.keys[:0]
 }
 
@@ -81,13 +84,16 @@ func (col *LowCardinality) Name() string {
 func (col *LowCardinality) parse(t Type, sc *ServerContext) (_ *LowCardinality, err error) {
 	col.chType = t
 	col.append.index = make(map[any]int)
-	col.append.borrowedIndex = make(map[uint64][]borrowedLowCardinalityEntry)
+	col.append.stringIndex = make(map[uint64][]lowCardinalityStringEntry)
 	col.append.hashSeed = maphash.MakeSeed()
 	if col.index, err = Type(t.params()).Column(col.name, sc); err != nil {
 		return nil, err
 	}
 	if nullable, ok := col.index.(*Nullable); ok {
 		col.nullable, nullable.enable = true, false
+		_, col.stringValues = nullable.Base().(*String)
+	} else {
+		_, col.stringValues = col.index.(*String)
 	}
 	return col, nil
 }
@@ -121,6 +127,15 @@ func (col *LowCardinality) ScanRow(dest any, row int) error {
 }
 
 func (col *LowCardinality) Append(v any) (nulls []uint8, err error) {
+	if values, ok := v.(BorrowedBytesColumn); ok {
+		nulls = make([]uint8, len(values))
+		for i := range values {
+			if err := col.AppendRow(BorrowedBytes(values[i])); err != nil {
+				return nil, err
+			}
+		}
+		return nulls, nil
+	}
 	value := reflect.Indirect(reflect.ValueOf(v))
 	if value.Kind() != reflect.Slice {
 		return nil, &ColumnConverterError{
@@ -141,8 +156,8 @@ func (col *LowCardinality) AppendRow(v any) error {
 	if col.append.index == nil {
 		col.append.index = make(map[any]int)
 	}
-	if col.append.borrowedIndex == nil {
-		col.append.borrowedIndex = make(map[uint64][]borrowedLowCardinalityEntry)
+	if col.append.stringIndex == nil {
+		col.append.stringIndex = make(map[uint64][]lowCardinalityStringEntry)
 	}
 	if col.index.Rows() == 0 { // init
 		if err := col.index.AppendRow(nil); err != nil {
@@ -164,6 +179,10 @@ func (col *LowCardinality) AppendRow(v any) error {
 		return col.appendBorrowed(value)
 	case *BorrowedBytes:
 		return col.appendBorrowed(*value)
+	case string:
+		if col.stringValues {
+			return col.appendOwnedString(value)
+		}
 	}
 	switch x := v.(type) {
 	case time.Time:
@@ -188,8 +207,8 @@ func (col *LowCardinality) AppendRow(v any) error {
 
 func (col *LowCardinality) appendBorrowed(value []byte) error {
 	hash := maphash.Bytes(col.append.hashSeed, value)
-	for _, entry := range col.append.borrowedIndex[hash] {
-		if bytes.Equal(entry.value, value) {
+	for _, entry := range col.append.stringIndex[hash] {
+		if entry.matchesBytes(value) {
 			col.appendKey(entry.index)
 			return nil
 		}
@@ -202,12 +221,48 @@ func (col *LowCardinality) appendBorrowed(value []byte) error {
 		value = nil
 	}
 	index := col.index.Rows() - 1
-	col.append.borrowedIndex[hash] = append(col.append.borrowedIndex[hash], borrowedLowCardinalityEntry{
-		value: value,
+	col.append.stringIndex[hash] = append(col.append.stringIndex[hash], lowCardinalityStringEntry{
+		borrowed: true,
+		bytes:    value,
+		index:    index,
+	})
+	col.appendKey(index)
+	return nil
+}
+
+func (col *LowCardinality) appendOwnedString(value string) error {
+	hash := maphash.String(col.append.hashSeed, value)
+	for _, entry := range col.append.stringIndex[hash] {
+		if entry.matchesString(value) {
+			col.appendKey(entry.index)
+			return nil
+		}
+	}
+
+	if err := col.index.AppendRow(value); err != nil {
+		return err
+	}
+	index := col.index.Rows() - 1
+	col.append.stringIndex[hash] = append(col.append.stringIndex[hash], lowCardinalityStringEntry{
+		owned: value,
 		index: index,
 	})
 	col.appendKey(index)
 	return nil
+}
+
+func (entry lowCardinalityStringEntry) matchesBytes(value []byte) bool {
+	if entry.borrowed {
+		return bytes.Equal(entry.bytes, value)
+	}
+	return entry.owned == string(value)
+}
+
+func (entry lowCardinalityStringEntry) matchesString(value string) bool {
+	if entry.borrowed {
+		return string(entry.bytes) == value
+	}
+	return entry.owned == value
 }
 
 func (col *LowCardinality) appendKey(index int) {
@@ -290,7 +345,7 @@ func (col *LowCardinality) Write(writer *proto.Writer) {
 }
 
 func (col *LowCardinality) prepareKeys() Interface {
-	ixLen := uint64(len(col.append.index) + col.borrowedIndexRows())
+	ixLen := uint64(len(col.append.index) + col.stringIndexRows())
 	switch {
 	case col.keys().Rows() > 0:
 		// We already have keys, so this column is probably in a block directly decoded from the server, and we should
@@ -319,9 +374,9 @@ func (col *LowCardinality) prepareKeys() Interface {
 	return col.keys()
 }
 
-func (col *LowCardinality) borrowedIndexRows() int {
+func (col *LowCardinality) stringIndexRows() int {
 	rows := 0
-	for _, entries := range col.append.borrowedIndex {
+	for _, entries := range col.append.stringIndex {
 		rows += len(entries)
 	}
 	return rows
@@ -330,7 +385,7 @@ func (col *LowCardinality) borrowedIndexRows() int {
 func (col *LowCardinality) clearAppendState() {
 	col.append.keys = nil
 	col.append.index = nil
-	col.append.borrowedIndex = nil
+	col.append.stringIndex = nil
 }
 
 func (col *LowCardinality) ReadStatePrefix(reader *proto.Reader) error {

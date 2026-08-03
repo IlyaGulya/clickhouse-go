@@ -61,18 +61,51 @@ func TestStringEmptyValuesDoNotSelectOwnershipMode(t *testing.T) {
 	require.Equal(t, 4, col.Rows())
 }
 
-func TestStringRejectsMixedOwnershipModes(t *testing.T) {
+func TestStringSupportsMixedOwnershipModes(t *testing.T) {
 	t.Run("OwnedThenBorrowed", func(t *testing.T) {
 		col := new(String)
 		require.NoError(t, col.AppendRow([]byte("owned")))
-		require.ErrorContains(t, col.AppendRow(BorrowedBytes("borrowed")), "cannot mix")
+		require.NoError(t, col.AppendRow(BorrowedBytes("borrowed")))
+		require.Equal(t, "owned", col.Row(0, false))
+		require.Equal(t, "borrowed", col.Row(1, false))
 	})
 
 	t.Run("BorrowedThenOwned", func(t *testing.T) {
 		col := new(String)
 		require.NoError(t, col.AppendRow(BorrowedBytes("borrowed")))
-		require.ErrorContains(t, col.AppendRow([]byte("owned")), "cannot mix")
+		require.NoError(t, col.AppendRow([]byte("owned")))
+		require.Equal(t, "borrowed", col.Row(0, false))
+		require.Equal(t, "owned", col.Row(1, false))
 	})
+}
+
+func TestStringMixedOwnershipPreservesCopyContract(t *testing.T) {
+	ownedBefore := []byte("owned-before")
+	borrowed := []byte("borrowed")
+	ownedAfter := []byte("owned-after")
+	col := new(String)
+
+	require.NoError(t, col.AppendRow(ownedBefore))
+	require.NoError(t, col.AppendRow(BorrowedBytes(borrowed)))
+	require.NoError(t, col.AppendRow(ownedAfter))
+	ownedBefore[0] = 'X'
+	borrowed[0] = 'B'
+	ownedAfter[0] = 'X'
+
+	require.Equal(t, "owned-before", col.Row(0, false))
+	require.Equal(t, "Borrowed", col.Row(1, false))
+	require.Equal(t, "owned-after", col.Row(2, false))
+}
+
+func TestStringAppendBorrowedBytesColumnWithoutSliceConversion(t *testing.T) {
+	values := [][]byte{[]byte("first"), []byte("second")}
+	col := new(String)
+
+	nulls, err := col.Append(BorrowedBytesColumn(values))
+	require.NoError(t, err)
+	require.Equal(t, []uint8{0, 0}, nulls)
+	require.Same(t, &values[0][0], &col.borrowed.RowBytes(0)[0])
+	require.Same(t, &values[1][0], &col.borrowed.RowBytes(1)[0])
 }
 
 func TestStringResetReleasesBorrowedValues(t *testing.T) {

@@ -30,6 +30,7 @@ func FuzzLowCardinalityBorrowedMatchesOwned(f *testing.F) {
 		owned := fuzzLowCardinalityColumn(t, typeOf, values, false)
 		borrowed := fuzzLowCardinalityColumn(t, typeOf, values, true)
 		streamed := fuzzLowCardinalityColumn(t, typeOf, values, true)
+		mixed := fuzzLowCardinalityMixedColumn(t, typeOf, values)
 
 		var expected proto.Buffer
 		owned.Encode(&expected)
@@ -37,6 +38,11 @@ func FuzzLowCardinalityBorrowedMatchesOwned(f *testing.F) {
 		borrowed.Encode(&actual)
 		if !bytes.Equal(expected.Buf, actual.Buf) {
 			t.Fatal("owned and borrowed LowCardinality encodings differ")
+		}
+		var mixedEncoded proto.Buffer
+		mixed.Encode(&mixedEncoded)
+		if !bytes.Equal(expected.Buf, mixedEncoded.Buf) {
+			t.Fatal("owned and mixed LowCardinality encodings differ")
 		}
 
 		var streamedBytes bytes.Buffer
@@ -50,10 +56,34 @@ func FuzzLowCardinalityBorrowedMatchesOwned(f *testing.F) {
 		}
 
 		borrowed.Reset()
-		if borrowed.Rows() != 0 || len(borrowed.append.borrowedIndex) != 0 {
+		if borrowed.Rows() != 0 || len(borrowed.append.stringIndex) != 0 {
 			t.Fatal("reset retained borrowed LowCardinality state")
 		}
 	})
+}
+
+func fuzzLowCardinalityMixedColumn(t *testing.T, typeOf Type, values []fuzzLowCardinalityValue) *LowCardinality {
+	t.Helper()
+	column, err := typeOf.Column("value", nil)
+	if err != nil {
+		t.Fatalf("create mixed LowCardinality column: %v", err)
+	}
+	lowCardinality := column.(*LowCardinality)
+	for i, value := range values {
+		var row any
+		switch {
+		case value.isNull:
+			row = nil
+		case i%2 == 0:
+			row = BorrowedBytes(value.value)
+		default:
+			row = string(value.value)
+		}
+		if err := lowCardinality.AppendRow(row); err != nil {
+			t.Fatalf("append mixed LowCardinality row: %v", err)
+		}
+	}
+	return lowCardinality
 }
 
 type fuzzLowCardinalityValue struct {

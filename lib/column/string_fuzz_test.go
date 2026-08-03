@@ -23,6 +23,7 @@ func FuzzStringBorrowedMatchesOwned(f *testing.F) {
 		}
 		var owned String
 		var borrowed String
+		var mixed String
 		for len(input) > 0 {
 			control := input[0]
 			input = input[1:]
@@ -32,6 +33,9 @@ func FuzzStringBorrowedMatchesOwned(f *testing.F) {
 				}
 				if err := borrowed.AppendRow(nil); err != nil {
 					t.Fatalf("append borrowed nil: %v", err)
+				}
+				if err := mixed.AppendRow(nil); err != nil {
+					t.Fatalf("append mixed nil: %v", err)
 				}
 				continue
 			}
@@ -52,14 +56,24 @@ func FuzzStringBorrowedMatchesOwned(f *testing.F) {
 			if err := borrowed.AppendRow(BorrowedBytes(value)); err != nil {
 				t.Fatalf("append borrowed value: %v", err)
 			}
+			var mixedValue any = []byte(value)
+			if mixed.Rows()%2 == 0 {
+				mixedValue = BorrowedBytes(value)
+			}
+			if err := mixed.AppendRow(mixedValue); err != nil {
+				t.Fatalf("append mixed value: %v", err)
+			}
 		}
 
-		if owned.Rows() != borrowed.Rows() {
-			t.Fatalf("row count differs: owned=%d borrowed=%d", owned.Rows(), borrowed.Rows())
+		if owned.Rows() != borrowed.Rows() || owned.Rows() != mixed.Rows() {
+			t.Fatalf("row count differs: owned=%d borrowed=%d mixed=%d", owned.Rows(), borrowed.Rows(), mixed.Rows())
 		}
 		for i := 0; i < owned.Rows(); i++ {
 			if owned.Row(i, false) != borrowed.Row(i, false) {
 				t.Fatalf("row %d differs: owned=%q borrowed=%q", i, owned.Row(i, false), borrowed.Row(i, false))
+			}
+			if owned.Row(i, false) != mixed.Row(i, false) {
+				t.Fatalf("row %d differs: owned=%q mixed=%q", i, owned.Row(i, false), mixed.Row(i, false))
 			}
 		}
 
@@ -69,6 +83,11 @@ func FuzzStringBorrowedMatchesOwned(f *testing.F) {
 		borrowed.Encode(&actual)
 		if !bytes.Equal(expected.Buf, actual.Buf) {
 			t.Fatal("contiguous encoding differs")
+		}
+		var mixedEncoded proto.Buffer
+		mixed.Encode(&mixedEncoded)
+		if !bytes.Equal(expected.Buf, mixedEncoded.Buf) {
+			t.Fatal("mixed contiguous encoding differs")
 		}
 
 		var streamed bytes.Buffer
