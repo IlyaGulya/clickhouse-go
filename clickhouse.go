@@ -28,10 +28,11 @@ type (
 	BorrowedBytes = column.BorrowedBytes
 )
 
-// BorrowBytes marks v as caller-owned String data that the native batch may
-// reference without copying while it is assembled. The caller must not mutate
-// or reuse v until the batch operation encoding it has completed. Use a plain
-// []byte when that lifetime cannot be guaranteed.
+// BorrowBytes marks v as caller-owned String data that a batch may reference
+// without copying while it is assembled and encoded. The caller must not
+// mutate or reuse v until Send returns. If the batch is not sent, v must remain
+// immutable until Abort or Close returns. Use a plain []byte when that lifetime
+// cannot be guaranteed.
 func BorrowBytes(v []byte) BorrowedBytes {
 	return BorrowedBytes(v)
 }

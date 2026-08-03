@@ -31,8 +31,9 @@ const (
 
 // BorrowedBytes is an opt-in String value that remains owned by the caller.
 // Unlike []byte, appending BorrowedBytes does not copy its contents into the
-// column buffer. The caller must keep the underlying bytes immutable for the
-// complete lifetime of the batch operation that encodes them.
+// column buffer. The caller must keep the underlying bytes immutable until the
+// enclosing batch's Send returns, or until Abort or Close returns if the batch
+// is not sent.
 type BorrowedBytes []byte
 
 func (col *String) Reset() {
