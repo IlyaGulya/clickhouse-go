@@ -12,6 +12,10 @@ func FuzzStringBorrowedMatchesOwned(f *testing.F) {
 	f.Add([]byte("\x00"))
 	f.Add([]byte("\x00\x03abc\x01\x05hello"))
 	f.Add(bytes.Repeat([]byte("payload"), 1024))
+	f.Add(fuzzStringLengthSeed(127))
+	f.Add(fuzzStringLengthSeed(128))
+	f.Add(fuzzStringLengthSeed(16_383))
+	f.Add(fuzzStringLengthSeed(16_384))
 
 	f.Fuzz(func(t *testing.T, input []byte) {
 		if len(input) > 1<<16 {
@@ -33,6 +37,10 @@ func FuzzStringBorrowedMatchesOwned(f *testing.F) {
 			}
 
 			size := int(control >> 2)
+			if size == 63 && len(input) >= 2 {
+				size = int(input[0]) | int(input[1])<<8
+				input = input[2:]
+			}
 			if size > len(input) {
 				size = len(input)
 			}
@@ -78,4 +86,9 @@ func FuzzStringBorrowedMatchesOwned(f *testing.F) {
 			t.Fatalf("reset retained borrowed state")
 		}
 	})
+}
+
+func fuzzStringLengthSeed(size int) []byte {
+	seed := []byte{0xff, byte(size), byte(size >> 8)}
+	return append(seed, bytes.Repeat([]byte{'x'}, size)...)
 }

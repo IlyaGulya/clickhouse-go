@@ -32,6 +32,10 @@ func FuzzBlockWriteMatchesEncode(f *testing.F) {
 	f.Add([]byte(nil), byte(0))
 	f.Add([]byte("first\x00second"), byte(1))
 	f.Add(bytes.Repeat([]byte("payload"), 1024), byte(2))
+	f.Add(fuzzBlockLengthSeed(127), byte(0))
+	f.Add(fuzzBlockLengthSeed(128), byte(1))
+	f.Add(fuzzBlockLengthSeed(16_383), byte(0))
+	f.Add(fuzzBlockLengthSeed(16_384), byte(1))
 
 	f.Fuzz(func(t *testing.T, input []byte, revisionSelector byte) {
 		if len(input) > 1<<16 {
@@ -66,6 +70,10 @@ func fuzzBlockStrings(input []byte) [][]byte {
 	for len(input) > 0 {
 		size := int(input[0] >> 2)
 		input = input[1:]
+		if size == 63 && len(input) >= 2 {
+			size = int(input[0]) | int(input[1])<<8
+			input = input[2:]
+		}
 		if size > len(input) {
 			size = len(input)
 		}
@@ -73,4 +81,9 @@ func fuzzBlockStrings(input []byte) [][]byte {
 		input = input[size:]
 	}
 	return values
+}
+
+func fuzzBlockLengthSeed(size int) []byte {
+	seed := []byte{0xff, byte(size), byte(size >> 8)}
+	return append(seed, bytes.Repeat([]byte{'x'}, size)...)
 }

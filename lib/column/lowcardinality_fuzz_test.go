@@ -12,6 +12,10 @@ func FuzzLowCardinalityBorrowedMatchesOwned(f *testing.F) {
 	f.Add([]byte("\x00"), true)
 	f.Add([]byte("\x17first\x1bsecond\x17first\x00"), false)
 	f.Add(bytes.Repeat([]byte("low-cardinality"), 512), true)
+	f.Add(fuzzLowCardinalityUniqueSeed(254), false)
+	f.Add(fuzzLowCardinalityUniqueSeed(255), false)
+	f.Add(fuzzLowCardinalityUniqueSeed(254), true)
+	f.Add(fuzzLowCardinalityUniqueSeed(255), true)
 
 	f.Fuzz(func(t *testing.T, input []byte, nullable bool) {
 		if len(input) > 1<<16 {
@@ -67,6 +71,10 @@ func fuzzLowCardinalityValues(input []byte) []fuzzLowCardinalityValue {
 			continue
 		}
 		size := int(control >> 2)
+		if size == 63 && len(input) >= 2 {
+			size = int(input[0]) | int(input[1])<<8
+			input = input[2:]
+		}
 		if size > len(input) {
 			size = len(input)
 		}
@@ -74,6 +82,14 @@ func fuzzLowCardinalityValues(input []byte) []fuzzLowCardinalityValue {
 		input = input[size:]
 	}
 	return values
+}
+
+func fuzzLowCardinalityUniqueSeed(count int) []byte {
+	seed := make([]byte, 0, count*3)
+	for i := range count {
+		seed = append(seed, 2<<2|1, byte(i), byte(i>>8))
+	}
+	return seed
 }
 
 func fuzzLowCardinalityColumn(t *testing.T, typeOf Type, values []fuzzLowCardinalityValue, borrowed bool) *LowCardinality {
