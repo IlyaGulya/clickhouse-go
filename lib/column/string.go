@@ -18,6 +18,12 @@ type String struct {
 	col  proto.ColStr
 }
 
+// BorrowedBytes is an opt-in String value that remains owned by the caller.
+// Unlike []byte, appending BorrowedBytes does not copy its contents into the
+// column buffer. The caller must keep the underlying bytes immutable for the
+// complete lifetime of the batch operation that encodes them.
+type BorrowedBytes []byte
+
 func (col *String) Reset() {
 	col.col.Reset()
 }
@@ -114,6 +120,14 @@ func (col *String) AppendRow(v any) error {
 		col.col.AppendBytes(v)
 	case *[]byte:
 		col.col.AppendBytes(*v)
+	case BorrowedBytes:
+		col.col.AppendBorrowedBytes(v)
+	case *BorrowedBytes:
+		if v != nil {
+			col.col.AppendBorrowedBytes(*v)
+		} else {
+			col.col.AppendBorrowedBytes(nil)
+		}
 	case nil:
 		col.col.Append("")
 	default:
@@ -196,6 +210,21 @@ func (col *String) Append(v any) (nulls []uint8, err error) {
 		nulls = make([]uint8, len(v))
 		for i := range v {
 			col.col.Append(string(v[i]))
+		}
+	case []BorrowedBytes:
+		nulls = make([]uint8, len(v))
+		for i := range v {
+			col.col.AppendBorrowedBytes(v[i])
+		}
+	case []*BorrowedBytes:
+		nulls = make([]uint8, len(v))
+		for i := range v {
+			if v[i] == nil {
+				nulls[i] = 1
+				col.col.AppendBorrowedBytes(nil)
+				continue
+			}
+			col.col.AppendBorrowedBytes(*v[i])
 		}
 	default:
 
