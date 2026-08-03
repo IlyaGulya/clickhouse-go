@@ -2,6 +2,7 @@ package clickhouse
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -248,25 +249,31 @@ func (b *httpBatch) Send() (err error) {
 	defer b.conn.compressionPool.Put(compressionWriter)
 	pipeReader, pipeWriter := io.Pipe()
 	connWriter := compressionWriter.reset(pipeWriter)
+	producerDone := make(chan error, 1)
 
-	// The producer exits after encoding and closing the compression stream, or
-	// earlier when the HTTP consumer closes the pipe and a write fails.
+	// The producer stops after it encodes the data and closes the compression stream.
+	// It can stop before this if the HTTP consumer closes the pipe and a write fails.
 	go func() {
 		if writeErr := b.conn.writeDataTo(connWriter, b.block); writeErr != nil {
 			if closeErr := pipeWriter.CloseWithError(writeErr); closeErr != nil {
 				b.conn.logger.Debug("batch: failed to close HTTP pipe after write error", slog.Any("error", closeErr))
 			}
+			producerDone <- writeErr
 			return
 		}
 		if closeErr := connWriter.Close(); closeErr != nil {
 			if pipeCloseErr := pipeWriter.CloseWithError(closeErr); pipeCloseErr != nil {
 				b.conn.logger.Debug("batch: failed to close HTTP pipe after compression error", slog.Any("error", pipeCloseErr))
 			}
+			producerDone <- closeErr
 			return
 		}
 		if closeErr := pipeWriter.Close(); closeErr != nil {
 			b.conn.logger.Debug("batch: failed to close HTTP pipe", slog.Any("error", closeErr))
+			producerDone <- closeErr
+			return
 		}
+		producerDone <- nil
 	}()
 
 	options.settings["query"] = b.query
@@ -277,7 +284,19 @@ func (b *httpBatch) Send() (err error) {
 		slog.Int("rows", b.block.Rows()))
 	res, err := b.conn.sendStreamQuery(b.ctx, pipeReader, &options, headers) //nolint:bodyclose // false positive
 	if err != nil {
+		if closeErr := pipeReader.CloseWithError(err); closeErr != nil {
+			b.conn.logger.Debug("batch: failed to close HTTP reader after request error", slog.Any("error", closeErr))
+		}
+		if producerErr := <-producerDone; producerErr != nil && !errors.Is(producerErr, io.ErrClosedPipe) {
+			b.conn.logger.Debug("batch: producer stopped after request error", slog.Any("error", producerErr))
+		}
 		return fmt.Errorf("batch sendStreamQuery: %w", err)
+	}
+	if producerErr := <-producerDone; producerErr != nil {
+		if closeErr := res.Body.Close(); closeErr != nil {
+			b.conn.logger.Debug("batch: failed to close response after producer error", slog.Any("error", closeErr))
+		}
+		return fmt.Errorf("batch producer: %w", producerErr)
 	}
 	// A 200 status is not yet success: a failure after the server flushed its
 	// headers arrives in-band, in the response body.
