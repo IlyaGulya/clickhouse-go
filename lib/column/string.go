@@ -214,6 +214,10 @@ func (col *String) selectInputMode(mode stringInputMode) error {
 }
 
 func (col *String) appendOwnedString(v string) error {
+	if len(v) == 0 {
+		col.appendEmpty()
+		return nil
+	}
 	if err := col.selectInputMode(stringInputOwned); err != nil {
 		return err
 	}
@@ -222,6 +226,10 @@ func (col *String) appendOwnedString(v string) error {
 }
 
 func (col *String) appendOwnedBytes(v []byte) error {
+	if len(v) == 0 {
+		col.appendEmpty()
+		return nil
+	}
 	if err := col.selectInputMode(stringInputOwned); err != nil {
 		return err
 	}
@@ -230,6 +238,10 @@ func (col *String) appendOwnedBytes(v []byte) error {
 }
 
 func (col *String) appendBorrowed(v []byte) error {
+	if len(v) == 0 {
+		col.appendEmpty()
+		return nil
+	}
 	if err := col.selectInputMode(stringInputBorrowed); err != nil {
 		return err
 	}

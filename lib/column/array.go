@@ -235,6 +235,13 @@ func (col *Array) Encode(buffer *proto.Buffer) {
 	col.values.Encode(buffer)
 }
 
+func (col *Array) Write(writer *proto.Writer) {
+	for _, offset := range col.offsets {
+		writer.ChainBuffer(offset.values.col.EncodeColumn)
+	}
+	WriteData(writer, col.values)
+}
+
 func (col *Array) ReadStatePrefix(reader *proto.Reader) error {
 	if serialize, ok := col.values.(CustomSerialization); ok {
 		if err := serialize.ReadStatePrefix(reader); err != nil {
@@ -481,4 +488,5 @@ func (col *Array) scanSliceOfStructs(sliceType reflect.Type, row int) (reflect.V
 var (
 	_ Interface           = (*Array)(nil)
 	_ CustomSerialization = (*Array)(nil)
+	_ CustomWriting       = (*Array)(nil)
 )

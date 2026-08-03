@@ -354,13 +354,8 @@ func (c *connect) writeCompressedBlock(block *proto.Block) error {
 	stream := compress.NewStreamWriter(compressedBlockSink{connect: c}, c.compressor)
 	writer := chproto.NewStreamingWriter(stream, new(chproto.Buffer))
 
-	if err := block.WriteHeader(writer, c.revision); err != nil {
-		return fmt.Errorf("send data: failed to encode block header (conn_id=%d): %w", c.id, err)
-	}
-	for i := range block.Columns {
-		if err := block.WriteColumn(writer, c.revision, i); err != nil {
-			return fmt.Errorf("send data: failed to encode column %d (conn_id=%d): %w", i, c.id, err)
-		}
+	if err := block.Write(writer, c.revision); err != nil {
+		return fmt.Errorf("send data: failed to encode block (conn_id=%d): %w", c.id, err)
 	}
 	if _, err := writer.Flush(); err != nil {
 		return fmt.Errorf("send data: failed to stream block (conn_id=%d): %w", c.id, err)

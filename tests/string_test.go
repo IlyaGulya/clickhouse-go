@@ -19,6 +19,74 @@ type testStr struct {
 	Col1 string
 }
 
+func TestBorrowedString(t *testing.T) {
+	TestProtocols(t, func(t *testing.T, protocol clickhouse.Protocol) {
+		conn, err := GetNativeConnection(t, protocol, nil, nil, &clickhouse.Compression{
+			Method: clickhouse.CompressionLZ4,
+		})
+		require.NoError(t, err)
+
+		ctx := context.Background()
+		const ddl = `
+		CREATE TABLE test_borrowed_string (
+			value String,
+			nullable_value Nullable(String),
+			array_value Array(String)
+		) Engine MergeTree() ORDER BY tuple()
+		`
+		t.Cleanup(func() {
+			_ = conn.Exec(ctx, "DROP TABLE IF EXISTS test_borrowed_string")
+		})
+		require.NoError(t, conn.Exec(ctx, ddl))
+
+		value := []byte("payload")
+		nullableValue := []byte("nullable")
+		firstArrayValue := []byte("first")
+		secondArrayValue := []byte("second")
+		batch, err := conn.PrepareBatch(ctx, "INSERT INTO test_borrowed_string")
+		require.NoError(t, err)
+		require.NoError(t, batch.Append(
+			clickhouse.BorrowBytes(value),
+			clickhouse.BorrowBytes(nullableValue),
+			[]clickhouse.BorrowedBytes{
+				clickhouse.BorrowBytes(firstArrayValue),
+				clickhouse.BorrowBytes(secondArrayValue),
+			},
+		))
+		require.NoError(t, batch.Append(
+			clickhouse.BorrowBytes(nil),
+			nil,
+			[]clickhouse.BorrowedBytes{},
+		))
+		require.NoError(t, batch.Send())
+
+		rows, err := conn.Query(ctx, `
+			SELECT value, nullable_value, array_value
+			FROM test_borrowed_string
+			ORDER BY length(value) DESC
+		`)
+		require.NoError(t, err)
+		defer rows.Close()
+
+		require.True(t, rows.Next())
+		var gotValue string
+		var gotNullable *string
+		var gotArray []string
+		require.NoError(t, rows.Scan(&gotValue, &gotNullable, &gotArray))
+		require.Equal(t, "payload", gotValue)
+		require.NotNil(t, gotNullable)
+		require.Equal(t, "nullable", *gotNullable)
+		require.Equal(t, []string{"first", "second"}, gotArray)
+
+		require.True(t, rows.Next())
+		require.NoError(t, rows.Scan(&gotValue, &gotNullable, &gotArray))
+		require.Empty(t, gotValue)
+		require.Nil(t, gotNullable)
+		require.Empty(t, gotArray)
+		require.NoError(t, rows.Err())
+	})
+}
+
 func (t testStr) String() string {
 	return t.Col1
 }

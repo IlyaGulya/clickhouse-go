@@ -176,6 +176,18 @@ func (b *Block) WriteHeader(writer *proto.Writer, revision uint64) error {
 	return writeErr
 }
 
+func (b *Block) Write(writer *proto.Writer, revision uint64) error {
+	if err := b.WriteHeader(writer, revision); err != nil {
+		return err
+	}
+	for i := range b.Columns {
+		if err := b.WriteColumn(writer, revision, i); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (b *Block) WriteColumn(writer *proto.Writer, revision uint64, i int) error {
 	if i < 0 || i >= len(b.Columns) {
 		return &BlockError{
@@ -208,11 +220,7 @@ func (b *Block) WriteColumn(writer *proto.Writer, revision uint64, i int) error 
 		return writeErr
 	}
 
-	if stream, ok := c.(column.CustomWriting); ok {
-		stream.Write(writer)
-	} else {
-		writer.ChainBuffer(c.Encode)
-	}
+	column.WriteData(writer, c)
 	return nil
 }
 

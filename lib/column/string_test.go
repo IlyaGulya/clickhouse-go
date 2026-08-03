@@ -48,6 +48,19 @@ func TestStringBorrowedModeHandlesLeadingNulls(t *testing.T) {
 	require.Equal(t, []byte("payload"), col.borrowed.RowBytes(1))
 }
 
+func TestStringEmptyValuesDoNotSelectOwnershipMode(t *testing.T) {
+	col := new(String)
+	require.NoError(t, col.AppendRow(""))
+	require.NoError(t, col.AppendRow([]byte(nil)))
+	require.NoError(t, col.AppendRow(BorrowedBytes(nil)))
+	require.Equal(t, stringInputUndecided, col.inputMode)
+	require.Equal(t, 3, col.Rows())
+
+	require.NoError(t, col.AppendRow(BorrowedBytes("payload")))
+	require.Equal(t, stringInputBorrowed, col.inputMode)
+	require.Equal(t, 4, col.Rows())
+}
+
 func TestStringRejectsMixedOwnershipModes(t *testing.T) {
 	t.Run("OwnedThenBorrowed", func(t *testing.T) {
 		col := new(String)
