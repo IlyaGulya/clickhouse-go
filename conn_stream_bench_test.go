@@ -48,7 +48,7 @@ func BenchmarkBorrowedStringAppendAPI(b *testing.B) {
 						if columnar {
 							var input any = values.strings
 							if borrowed {
-								input = borrowedValues
+								input = column.BorrowedBytesColumn(values.bytes)
 							}
 							if _, err := block.Columns[0].Append(input); err != nil {
 								b.Fatal(err)
@@ -153,7 +153,7 @@ func BenchmarkBorrowedInsertEncodingMatrix(b *testing.B) {
 							inputName = "Borrowed"
 						}
 						b.Run(inputName, func(b *testing.B) {
-							for _, encoder := range []string{"Contiguous", "NativeStreaming", "HTTPStreaming"} {
+							for _, encoder := range []string{"PlainContiguous", "PlainStreaming", "Contiguous", "NativeStreaming", "HTTPStreaming"} {
 								b.Run(encoder, func(b *testing.B) {
 									benchmarkInsertEncoding(b, tc.columnType, tc.rows, tc.rowSize, values, borrowed, encoder)
 								})
@@ -243,6 +243,23 @@ func benchmarkInsertEncoding(
 
 func encodeBenchmarkBlock(block *proto.Block, encoder string) (retained int64, wire int64, err error) {
 	switch encoder {
+	case "PlainContiguous":
+		buffer := new(chproto.Buffer)
+		if err := block.Encode(buffer, ClientTCPProtocolVersion); err != nil {
+			return 0, 0, err
+		}
+		return int64(cap(buffer.Buf)), int64(len(buffer.Buf)), nil
+	case "PlainStreaming":
+		transport := new(benchmarkNetConn)
+		conn := &connect{
+			conn:     transport,
+			buffer:   new(chproto.Buffer),
+			revision: ClientTCPProtocolVersion,
+		}
+		if err := conn.writeUncompressedBlock(block); err != nil {
+			return 0, 0, err
+		}
+		return int64(cap(conn.buffer.Buf)), transport.written, nil
 	case "Contiguous":
 		buffer := new(chproto.Buffer)
 		compressor := compress.NewWriter(compress.LevelZero, compress.LZ4)
