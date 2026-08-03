@@ -24,7 +24,16 @@ type (
 	Exception     = proto.Exception
 	ProfileInfo   = proto.ProfileInfo
 	ServerVersion = proto.ServerHandshake
+	BorrowedBytes = column.BorrowedBytes
 )
+
+// BorrowBytes marks v as caller-owned String data that the native batch may
+// reference without copying while it is assembled. The caller must not mutate
+// or reuse v until the batch operation encoding it has completed. Use a plain
+// []byte when that lifetime cannot be guaranteed.
+func BorrowBytes(v []byte) BorrowedBytes {
+	return BorrowedBytes(v)
+}
 
 var (
 	ErrBatchInvalid              = errors.New("clickhouse: batch is invalid. check appended data is correct")
