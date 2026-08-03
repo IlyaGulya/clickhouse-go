@@ -38,7 +38,7 @@ func TestBorrowedString(t *testing.T) {
 		) Engine MergeTree() ORDER BY tuple()
 		`
 		t.Cleanup(func() {
-			_ = conn.Exec(ctx, "DROP TABLE IF EXISTS test_borrowed_string")
+			require.NoError(t, conn.Exec(ctx, "DROP TABLE IF EXISTS test_borrowed_string"))
 		})
 		require.NoError(t, conn.Exec(ctx, ddl))
 

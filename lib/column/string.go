@@ -260,6 +260,17 @@ func (col *String) appendEmpty() {
 	}
 }
 
+func (col *String) finalizeInputMode() {
+	if col.inputMode != stringInputUndecided {
+		return
+	}
+	col.inputMode = stringInputOwned
+	for range col.pendingEmpties {
+		col.col.Append("")
+	}
+	col.pendingEmpties = 0
+}
+
 func (col *String) Append(v any) (nulls []uint8, err error) {
 	switch v := v.(type) {
 	case []string:
@@ -391,9 +402,7 @@ func (col *String) Decode(reader *proto.Reader, rows int) error {
 }
 
 func (col *String) Encode(buffer *proto.Buffer) {
-	if col.inputMode == stringInputUndecided {
-		_ = col.selectInputMode(stringInputOwned)
-	}
+	col.finalizeInputMode()
 	if col.inputMode == stringInputBorrowed {
 		col.borrowed.EncodeColumn(buffer)
 		return
@@ -404,9 +413,7 @@ func (col *String) Encode(buffer *proto.Buffer) {
 // Write streams String input into writer. Borrowed mode chains caller-owned
 // values directly; owned mode preserves the existing ColStr behavior.
 func (col *String) Write(writer *proto.Writer) {
-	if col.inputMode == stringInputUndecided {
-		_ = col.selectInputMode(stringInputOwned)
-	}
+	col.finalizeInputMode()
 	if col.inputMode == stringInputBorrowed {
 		col.borrowed.WriteColumn(writer)
 		return

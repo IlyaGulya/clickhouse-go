@@ -249,16 +249,24 @@ func (b *httpBatch) Send() (err error) {
 	pipeReader, pipeWriter := io.Pipe()
 	connWriter := compressionWriter.reset(pipeWriter)
 
+	// The producer exits after encoding and closing the compression stream, or
+	// earlier when the HTTP consumer closes the pipe and a write fails.
 	go func() {
 		if writeErr := b.conn.writeDataTo(connWriter, b.block); writeErr != nil {
-			_ = pipeWriter.CloseWithError(writeErr)
+			if closeErr := pipeWriter.CloseWithError(writeErr); closeErr != nil {
+				b.conn.logger.Debug("batch: failed to close HTTP pipe after write error", slog.Any("error", closeErr))
+			}
 			return
 		}
 		if closeErr := connWriter.Close(); closeErr != nil {
-			_ = pipeWriter.CloseWithError(closeErr)
+			if pipeCloseErr := pipeWriter.CloseWithError(closeErr); pipeCloseErr != nil {
+				b.conn.logger.Debug("batch: failed to close HTTP pipe after compression error", slog.Any("error", pipeCloseErr))
+			}
 			return
 		}
-		_ = pipeWriter.Close()
+		if closeErr := pipeWriter.Close(); closeErr != nil {
+			b.conn.logger.Debug("batch: failed to close HTTP pipe", slog.Any("error", closeErr))
+		}
 	}()
 
 	options.settings["query"] = b.query
