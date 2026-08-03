@@ -1,6 +1,7 @@
 package tests
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"database/sql/driver"
@@ -124,6 +125,50 @@ func TestBorrowedString(t *testing.T) {
 		require.Empty(t, gotLowCardinalityArray)
 		require.NoError(t, rows.Err())
 	})
+}
+
+func TestBorrowedStringCompressionBufferLimit(t *testing.T) {
+	conn, err := GetConnectionTCPWithOptions(testSet, nil, nil, &clickhouse.Compression{
+		Method: clickhouse.CompressionLZ4,
+	}, func(options *clickhouse.Options) {
+		options.MaxCompressionBuffer = 1 << 20
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, conn.Close())
+	})
+
+	ctx := context.Background()
+	require.NoError(t, conn.Exec(ctx, `
+		CREATE TABLE test_borrowed_string_buffer_limit (
+			value String
+		) Engine MergeTree() ORDER BY tuple()
+	`))
+	t.Cleanup(func() {
+		require.NoError(t, conn.Exec(ctx, "DROP TABLE IF EXISTS test_borrowed_string_buffer_limit"))
+	})
+
+	payload := makeBorrowedRandomPayload(4 << 20)
+	batch, err := conn.PrepareBatch(ctx, "INSERT INTO test_borrowed_string_buffer_limit")
+	require.NoError(t, err)
+	require.NoError(t, batch.Append(clickhouse.BorrowBytes(payload)))
+	require.NoError(t, batch.Send())
+
+	var actual []byte
+	require.NoError(t, conn.QueryRow(ctx, "SELECT value FROM test_borrowed_string_buffer_limit").Scan(&actual))
+	require.True(t, bytes.Equal(payload, actual))
+}
+
+func makeBorrowedRandomPayload(size int) []byte {
+	payload := make([]byte, size)
+	state := uint64(0x9e3779b97f4a7c15)
+	for i := range payload {
+		state ^= state << 13
+		state ^= state >> 7
+		state ^= state << 17
+		payload[i] = byte(state)
+	}
+	return payload
 }
 
 func (t testStr) String() string {

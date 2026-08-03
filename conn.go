@@ -371,8 +371,24 @@ type compressedBlockSink struct {
 }
 
 func (w compressedBlockSink) Write(p []byte) (int, error) {
+	maxBuffer := w.connect.maxCompressionBuffer
+	if maxBuffer > 0 && len(w.connect.buffer.Buf) > 0 && len(w.connect.buffer.Buf)+len(p) > maxBuffer {
+		if err := w.connect.flush(); err != nil {
+			return 0, err
+		}
+	}
+	if maxBuffer > 0 && len(p) >= maxBuffer {
+		n, err := w.connect.conn.Write(p)
+		if err != nil {
+			return n, err
+		}
+		if n != len(p) {
+			return n, io.ErrShortWrite
+		}
+		return n, nil
+	}
 	w.connect.buffer.PutRaw(p)
-	if w.connect.maxCompressionBuffer > 0 && len(w.connect.buffer.Buf) >= w.connect.maxCompressionBuffer {
+	if maxBuffer > 0 && len(w.connect.buffer.Buf) >= maxBuffer {
 		if err := w.connect.flush(); err != nil {
 			return 0, err
 		}

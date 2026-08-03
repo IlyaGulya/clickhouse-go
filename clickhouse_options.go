@@ -161,7 +161,10 @@ type Options struct {
 	HttpUrlPath          string            // set additional URL path for HTTP requests
 	HttpMaxConnsPerHost  int               // MaxConnsPerHost for http.Transport
 	BlockBufferSize      uint8             // default 2 - can be overwritten on query
-	MaxCompressionBuffer int               // default 10485760 - measured in bytes  i.e.
+	// MaxCompressionBuffer sets the maximum size of compressed data that is kept
+	// before a Native socket write. A compressed chunk of this size or more goes
+	// directly to the socket. The default is 10 MiB.
+	MaxCompressionBuffer int
 
 	// HTTPProxy specifies an HTTP proxy URL to use for requests made by the client.
 	HTTPProxyURL *url.URL
