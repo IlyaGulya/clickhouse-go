@@ -4,7 +4,9 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"net"
 	"testing"
+	"time"
 
 	"github.com/ClickHouse/ch-go/compress"
 	chproto "github.com/ClickHouse/ch-go/proto"
@@ -12,6 +14,118 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/column"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/proto"
 )
+
+func BenchmarkBorrowedStringAppendAPI(b *testing.B) {
+	const (
+		rows    = 4096
+		rowSize = 1 << 10
+	)
+	values := makeBenchmarkStringValues(rows, rowSize, true)
+	borrowedValues := make([]column.BorrowedBytes, rows)
+	for i := range borrowedValues {
+		borrowedValues[i] = values.bytes[i]
+	}
+
+	for _, borrowed := range []bool{false, true} {
+		inputName := "Owned"
+		if borrowed {
+			inputName = "Borrowed"
+		}
+		b.Run(inputName, func(b *testing.B) {
+			for _, columnar := range []bool{false, true} {
+				apiName := "Row"
+				if columnar {
+					apiName = "Column"
+				}
+				b.Run(apiName, func(b *testing.B) {
+					b.ReportAllocs()
+					b.SetBytes(rows * rowSize)
+					for range b.N {
+						block := proto.NewBlock()
+						if err := block.AddColumn("payload", column.Type("String")); err != nil {
+							b.Fatal(err)
+						}
+						if columnar {
+							var input any = values.strings
+							if borrowed {
+								input = borrowedValues
+							}
+							if _, err := block.Columns[0].Append(input); err != nil {
+								b.Fatal(err)
+							}
+							continue
+						}
+						for row := range rows {
+							var input any = values.strings[row]
+							if borrowed {
+								input = borrowedValues[row]
+							}
+							if err := block.Append(input); err != nil {
+								b.Fatal(err)
+							}
+						}
+					}
+				})
+			}
+		})
+	}
+}
+
+func BenchmarkBorrowedNativeSteadyState(b *testing.B) {
+	const (
+		rows    = 512
+		rowSize = 8 << 10
+	)
+	for _, random := range []bool{false, true} {
+		payloadName := "Compressible"
+		if random {
+			payloadName = "Random"
+		}
+		values := makeBenchmarkStringValues(rows, rowSize, random)
+		block := proto.NewBlock()
+		if err := block.AddColumn("payload", column.Type("String")); err != nil {
+			b.Fatal(err)
+		}
+		for row := range rows {
+			if err := block.Append(column.BorrowedBytes(values.bytes[row])); err != nil {
+				b.Fatal(err)
+			}
+		}
+
+		b.Run(payloadName, func(b *testing.B) {
+			for _, limit := range []int{1 << 20, 10 << 20} {
+				b.Run(fmt.Sprintf("BufferLimit/%dMiB", limit>>20), func(b *testing.B) {
+					transport := new(benchmarkNetConn)
+					conn := &connect{
+						conn:                 transport,
+						buffer:               new(chproto.Buffer),
+						compressor:           compress.NewWriter(compress.LevelZero, compress.LZ4),
+						compression:          CompressionLZ4,
+						revision:             ClientTCPProtocolVersion,
+						maxCompressionBuffer: limit,
+					}
+					b.ReportAllocs()
+					b.SetBytes(rows * rowSize)
+					var totalRetained, totalWire int64
+					b.ResetTimer()
+					for range b.N {
+						transport.written = 0
+						if err := conn.writeCompressedBlock(block); err != nil {
+							b.Fatal(err)
+						}
+						if err := conn.flush(); err != nil {
+							b.Fatal(err)
+						}
+						totalRetained += int64(cap(conn.buffer.Buf))
+						totalWire += transport.written
+					}
+					b.ReportMetric(float64(totalRetained)/float64(b.N), "retained-B/op")
+					b.ReportMetric(float64(totalWire)/float64(b.N), "wire-B/op")
+				})
+			}
+		})
+	}
+}
 
 func BenchmarkBorrowedInsertEncodingMatrix(b *testing.B) {
 	cases := []struct {
@@ -173,6 +287,27 @@ func (w *byteCountingWriter) Write(p []byte) (int, error) {
 	*w += byteCountingWriter(len(p))
 	return len(p), nil
 }
+
+type benchmarkNetConn struct {
+	written int64
+}
+
+func (*benchmarkNetConn) Read([]byte) (int, error) { return 0, io.EOF }
+func (c *benchmarkNetConn) Write(p []byte) (int, error) {
+	c.written += int64(len(p))
+	return len(p), nil
+}
+func (*benchmarkNetConn) Close() error                     { return nil }
+func (*benchmarkNetConn) LocalAddr() net.Addr              { return benchmarkAddr("local") }
+func (*benchmarkNetConn) RemoteAddr() net.Addr             { return benchmarkAddr("remote") }
+func (*benchmarkNetConn) SetDeadline(time.Time) error      { return nil }
+func (*benchmarkNetConn) SetReadDeadline(time.Time) error  { return nil }
+func (*benchmarkNetConn) SetWriteDeadline(time.Time) error { return nil }
+
+type benchmarkAddr string
+
+func (a benchmarkAddr) Network() string { return string(a) }
+func (a benchmarkAddr) String() string  { return string(a) }
 
 func BenchmarkCompressedBorrowedStringBlock(b *testing.B) {
 	const (
