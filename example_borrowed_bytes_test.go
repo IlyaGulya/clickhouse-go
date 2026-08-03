@@ -13,7 +13,8 @@ func ExampleBorrowBytes() {
 	// Append value to a String, Nullable(String), Array(String), or
 	// LowCardinality(String) batch column. Keep payload immutable until
 	// batch.Send returns, or until batch.Abort or batch.Close returns when the
-	// batch is not sent.
+	// batch is not sent. Native batches can be sent more than once; a later Send
+	// observes the payload's contents at the time of that call.
 	fmt.Println(string(value))
 
 	// Output: large payload

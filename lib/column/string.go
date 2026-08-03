@@ -33,7 +33,7 @@ const (
 // Unlike []byte, appending BorrowedBytes does not copy its contents into the
 // column buffer. The caller must keep the underlying bytes immutable until the
 // enclosing batch's Send returns, or until Abort or Close returns if the batch
-// is not sent.
+// is not sent. A Native batch may retain the value for a later Send.
 type BorrowedBytes []byte
 
 func (col *String) Reset() {

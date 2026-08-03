@@ -131,7 +131,7 @@ func TestHTTPBatchCancellationWaitsForBorrowedProducer(t *testing.T) {
 	}
 
 	// Send must not return while the producer can still read caller-owned data.
-	// The race detector turns a producer lifetime regression into a test failure.
+	// The race detector finds a regression in the producer lifetime.
 	for i := range payload {
 		payload[i]++
 	}

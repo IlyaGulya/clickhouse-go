@@ -32,7 +32,8 @@ type (
 // without copying while it is assembled and encoded. The caller must not
 // mutate or reuse v until Send returns. If the batch is not sent, v must remain
 // immutable until Abort or Close returns. Use a plain []byte when that lifetime
-// cannot be guaranteed.
+// cannot be guaranteed. Native batches retain appended values so they can be
+// sent again; each subsequent Send observes the current contents of v.
 func BorrowBytes(v []byte) BorrowedBytes {
 	return BorrowedBytes(v)
 }
