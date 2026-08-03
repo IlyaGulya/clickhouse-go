@@ -1,6 +1,6 @@
 module github.com/ClickHouse/clickhouse-go/v2
 
-replace github.com/ClickHouse/ch-go => github.com/IlyaGulya/ch-go v0.0.0-20260803164334-ed802875a4c5
+replace github.com/ClickHouse/ch-go => github.com/IlyaGulya/ch-go v0.0.0-20260804161201-018cef17d74b
 
 go 1.25.0
 
