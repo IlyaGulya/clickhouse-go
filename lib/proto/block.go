@@ -168,6 +168,62 @@ func (b *Block) Encode(buffer *proto.Buffer, revision uint64) (err error) {
 	return nil
 }
 
+func (b *Block) WriteHeader(writer *proto.Writer, revision uint64) error {
+	var writeErr error
+	writer.ChainBuffer(func(buffer *proto.Buffer) {
+		writeErr = b.EncodeHeader(buffer, revision)
+	})
+	return writeErr
+}
+
+func (b *Block) Write(writer *proto.Writer, revision uint64) error {
+	if err := b.WriteHeader(writer, revision); err != nil {
+		return err
+	}
+	for i := range b.Columns {
+		if err := b.WriteColumn(writer, revision, i); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (b *Block) WriteColumn(writer *proto.Writer, revision uint64, i int) error {
+	if i < 0 || i >= len(b.Columns) {
+		return &BlockError{
+			Op:  "Encode",
+			Err: fmt.Errorf("%d is out of range of %d columns", i, len(b.Columns)),
+		}
+	}
+
+	c := b.Columns[i]
+	var writeErr error
+	writer.ChainBuffer(func(buffer *proto.Buffer) {
+		buffer.PutString(c.Name())
+		buffer.PutString(string(c.Type()))
+
+		if revision >= DBMS_MIN_REVISION_WITH_CUSTOM_SERIALIZATION {
+			buffer.PutBool(false)
+		}
+
+		if serialize, ok := c.(column.CustomSerialization); ok {
+			if err := serialize.WriteStatePrefix(buffer); err != nil {
+				writeErr = &BlockError{
+					Op:         "Encode",
+					Err:        err,
+					ColumnName: c.Name(),
+				}
+			}
+		}
+	})
+	if writeErr != nil {
+		return writeErr
+	}
+
+	column.WriteData(writer, c)
+	return nil
+}
+
 func (b *Block) Decode(reader *proto.Reader, revision uint64) (err error) {
 	if revision > 0 {
 		if err := decodeBlockInfo(reader); err != nil {

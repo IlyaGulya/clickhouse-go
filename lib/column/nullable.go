@@ -168,6 +168,13 @@ func (col *Nullable) Encode(buffer *proto.Buffer) {
 	col.base.Encode(buffer)
 }
 
+func (col *Nullable) Write(writer *proto.Writer) {
+	if col.enable {
+		writer.ChainBuffer(col.nulls.EncodeColumn)
+	}
+	WriteData(writer, col.base)
+}
+
 func (col *Nullable) ReadStatePrefix(reader *proto.Reader) error {
 	if serialize, ok := col.base.(CustomSerialization); ok {
 		if err := serialize.ReadStatePrefix(reader); err != nil {
@@ -189,3 +196,4 @@ func (col *Nullable) WriteStatePrefix(buffer *proto.Buffer) error {
 }
 
 var _ Interface = (*Nullable)(nil)
+var _ CustomWriting = (*Nullable)(nil)

@@ -645,6 +645,12 @@ func (col *Tuple) Encode(buffer *proto.Buffer) {
 	}
 }
 
+func (col *Tuple) Write(writer *proto.Writer) {
+	for _, c := range col.columns {
+		WriteData(writer, c)
+	}
+}
+
 func (col *Tuple) ReadStatePrefix(reader *proto.Reader) error {
 	for _, c := range col.columns {
 		if serialize, ok := c.(CustomSerialization); ok {
@@ -670,6 +676,7 @@ func (col *Tuple) WriteStatePrefix(buffer *proto.Buffer) error {
 var (
 	_ Interface           = (*Tuple)(nil)
 	_ CustomSerialization = (*Tuple)(nil)
+	_ CustomWriting       = (*Tuple)(nil)
 )
 
 func getStructFieldName(field reflect.StructField) (string, bool) {

@@ -61,6 +61,10 @@ func (col *SimpleAggregateFunction) Encode(buffer *proto.Buffer) {
 	col.base.Encode(buffer)
 }
 
+func (col *SimpleAggregateFunction) Write(writer *proto.Writer) {
+	WriteData(writer, col.base)
+}
+
 func (col *SimpleAggregateFunction) ReadStatePrefix(reader *proto.Reader) error {
 	if serialize, ok := col.base.(CustomSerialization); ok {
 		if err := serialize.ReadStatePrefix(reader); err != nil {
@@ -83,3 +87,4 @@ func (col *SimpleAggregateFunction) WriteStatePrefix(buffer *proto.Buffer) error
 
 var _ Interface = (*SimpleAggregateFunction)(nil)
 var _ CustomSerialization = (*SimpleAggregateFunction)(nil)
+var _ CustomWriting = (*SimpleAggregateFunction)(nil)

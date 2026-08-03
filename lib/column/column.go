@@ -78,15 +78,15 @@ type CustomSerialization interface {
 	WriteStatePrefix(*proto.Buffer) error
 }
 
-// CustomWriting allows input columns to stream their encoded representation
-// without first materializing it in a contiguous Buffer.
+// CustomWriting lets an input column write encoded data as a stream.
+// It does not first make one contiguous Buffer.
 type CustomWriting interface {
 	Write(*proto.Writer)
 }
 
-// WriteData streams col when it provides a custom writer and otherwise falls
-// back to its contiguous encoder. Composite columns use this helper to retain
-// streaming behavior through nested types.
+// WriteData uses the custom writer of col when one is available.
+// If a custom writer is not available, WriteData uses the contiguous encoder.
+// Composite columns use WriteData to stream data from nested types.
 func WriteData(writer *proto.Writer, col Interface) {
 	if stream, ok := col.(CustomWriting); ok {
 		stream.Write(writer)
