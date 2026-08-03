@@ -269,17 +269,6 @@ func (c *connect) exception() error {
 	return &e
 }
 
-func (c *connect) compressBuffer(start int) error {
-	if c.compression != CompressionNone && len(c.buffer.Buf) > 0 {
-		data := c.buffer.Buf[start:]
-		if err := c.compressor.Compress(data); err != nil {
-			return fmt.Errorf("compress: %w", err)
-		}
-		c.buffer.Buf = append(c.buffer.Buf[:start], c.compressor.Data...)
-	}
-	return nil
-}
-
 func (c *connect) sendData(block *proto.Block, name string) error {
 	if c.isClosed() {
 		err := errors.New("attempted sending on closed connection")
@@ -295,8 +284,8 @@ func (c *connect) sendData(block *proto.Block, name string) error {
 	c.buffer.PutString(name)
 
 	if c.compression == CompressionNone {
-		if err := block.Encode(c.buffer, c.revision); err != nil {
-			return fmt.Errorf("send data: failed to encode block (conn_id=%d): %w", c.id, err)
+		if err := c.writeUncompressedBlock(block); err != nil {
+			return err
 		}
 	} else if err := c.writeCompressedBlock(block); err != nil {
 		return err
@@ -347,6 +336,18 @@ func (c *connect) sendData(block *proto.Block, name string) error {
 		c.buffer.Reset()
 	}()
 
+	return nil
+}
+
+func (c *connect) writeUncompressedBlock(block *proto.Block) error {
+	writer := chproto.NewWriter(c.conn, c.buffer)
+	if err := block.Write(writer, c.revision); err != nil {
+		c.buffer.Reset()
+		return fmt.Errorf("send data: failed to encode block (conn_id=%d): %w", c.id, err)
+	}
+	if _, err := writer.Flush(); err != nil {
+		return fmt.Errorf("send data: failed to stream block (conn_id=%d): %w", c.id, err)
+	}
 	return nil
 }
 

@@ -14,6 +14,44 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/proto"
 )
 
+func TestWriteUncompressedBlockMatchesEncode(t *testing.T) {
+	transport := new(recordingNetConn)
+	conn := &connect{
+		conn:     transport,
+		buffer:   new(chproto.Buffer),
+		revision: ClientTCPProtocolVersion,
+	}
+	conn.buffer.PutRaw([]byte("prefix"))
+	block := proto.NewBlock()
+	require.NoError(t, block.AddColumn("value", column.Type("String")))
+	require.NoError(t, block.Append(column.BorrowedBytes("first")))
+	require.NoError(t, block.Append(column.BorrowedBytes("second")))
+
+	var expected chproto.Buffer
+	expected.PutRaw([]byte("prefix"))
+	require.NoError(t, block.Encode(&expected, ClientTCPProtocolVersion))
+	require.NoError(t, conn.writeUncompressedBlock(block))
+
+	require.Equal(t, expected.Buf, transport.data)
+	require.Empty(t, conn.buffer.Buf)
+}
+
+func TestWriteUncompressedBlockPropagatesShortWrite(t *testing.T) {
+	transport := &recordingNetConn{shortWrite: true}
+	conn := &connect{
+		conn:     transport,
+		buffer:   new(chproto.Buffer),
+		revision: ClientTCPProtocolVersion,
+	}
+	block := proto.NewBlock()
+	require.NoError(t, block.AddColumn("value", column.Type("String")))
+	require.NoError(t, block.Append(column.BorrowedBytes("payload")))
+
+	err := conn.writeUncompressedBlock(block)
+	require.Error(t, err)
+	require.ErrorIs(t, err, io.ErrShortWrite)
+}
+
 func TestCompressedBlockSinkHonorsBufferLimit(t *testing.T) {
 	transport := new(recordingNetConn)
 	conn := &connect{
@@ -82,6 +120,8 @@ func (c *recordingNetConn) Write(p []byte) (int, error) {
 	written := len(p)
 	if c.shortWrite {
 		written--
+		c.data = append(c.data, p[:written]...)
+		return written, io.ErrShortWrite
 	}
 	c.data = append(c.data, p[:written]...)
 	return written, nil
