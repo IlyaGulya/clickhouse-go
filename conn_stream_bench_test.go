@@ -32,7 +32,39 @@ func BenchmarkCompressedBorrowedStringBlock(b *testing.B) {
 		}
 	}
 
-	b.SetBytes(rows * rowSize)
+	benchmarkCompressedBorrowedBlock(b, block, rows*rowSize)
+}
+
+func BenchmarkCompressedBorrowedLowCardinalityStringBlock(b *testing.B) {
+	const (
+		rows         = 4096
+		uniqueValues = 64
+		rowSize      = 8 << 10
+	)
+
+	values := make([]column.BorrowedBytes, uniqueValues)
+	for i := range values {
+		values[i] = make([]byte, rowSize)
+		for j := range values[i] {
+			values[i][j] = byte('a' + (j/128+i)%26)
+		}
+	}
+	block := proto.NewBlock()
+	if err := block.AddColumn("payload", column.Type("LowCardinality(String)")); err != nil {
+		b.Fatal(err)
+	}
+	for i := range rows {
+		if err := block.Append(values[i%len(values)]); err != nil {
+			b.Fatal(err)
+		}
+	}
+
+	benchmarkCompressedBorrowedBlock(b, block, rows*rowSize)
+}
+
+func benchmarkCompressedBorrowedBlock(b *testing.B, block *proto.Block, logicalBytes int) {
+	b.Helper()
+	b.SetBytes(int64(logicalBytes))
 	b.Run("Contiguous", func(b *testing.B) {
 		var totalCapacity, totalWireBytes int64
 		b.ReportAllocs()

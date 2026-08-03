@@ -1,8 +1,10 @@
 package column
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"hash/maphash"
 	"math"
 	"reflect"
 	"time"
@@ -47,10 +49,17 @@ type LowCardinality struct {
 	keys64 UInt64
 
 	append struct {
-		keys  []int
-		index map[any]int
+		keys          []int
+		index         map[any]int
+		borrowedIndex map[uint64][]borrowedLowCardinalityEntry
+		hashSeed      maphash.Seed
 	}
 	name string
+}
+
+type borrowedLowCardinalityEntry struct {
+	value []byte
+	index int
 }
 
 func (col *LowCardinality) Reset() {
@@ -61,6 +70,7 @@ func (col *LowCardinality) Reset() {
 	col.keys32.Reset()
 	col.keys64.Reset()
 	col.append.index = make(map[any]int)
+	col.append.borrowedIndex = make(map[uint64][]borrowedLowCardinalityEntry)
 	col.append.keys = col.append.keys[:0]
 }
 
@@ -71,6 +81,8 @@ func (col *LowCardinality) Name() string {
 func (col *LowCardinality) parse(t Type, sc *ServerContext) (_ *LowCardinality, err error) {
 	col.chType = t
 	col.append.index = make(map[any]int)
+	col.append.borrowedIndex = make(map[uint64][]borrowedLowCardinalityEntry)
+	col.append.hashSeed = maphash.MakeSeed()
 	if col.index, err = Type(t.params()).Column(col.name, sc); err != nil {
 		return nil, err
 	}
@@ -126,23 +138,43 @@ func (col *LowCardinality) Append(v any) (nulls []uint8, err error) {
 }
 
 func (col *LowCardinality) AppendRow(v any) error {
-	col.rows++
 	if col.append.index == nil {
 		col.append.index = make(map[any]int)
 	}
+	if col.append.borrowedIndex == nil {
+		col.append.borrowedIndex = make(map[uint64][]borrowedLowCardinalityEntry)
+	}
 	if col.index.Rows() == 0 { // init
-		if col.index.AppendRow(nil); col.nullable {
-			col.index.AppendRow(nil)
+		if err := col.index.AppendRow(nil); err != nil {
+			return err
+		}
+		if col.nullable {
+			if err := col.index.AppendRow(nil); err != nil {
+				return err
+			}
 		}
 	}
 	// second check is unfortunate - but we could be passed a *type(nil) e.g. via LowCardinality(Nullable(String))
 	if v == nil || (reflect.ValueOf(v).Kind() == reflect.Ptr && reflect.ValueOf(v).IsNil()) {
-		col.append.keys = append(col.append.keys, 0)
+		col.appendKey(0)
 		return nil
+	}
+	switch value := v.(type) {
+	case BorrowedBytes:
+		return col.appendBorrowed(value)
+	case *BorrowedBytes:
+		return col.appendBorrowed(*value)
 	}
 	switch x := v.(type) {
 	case time.Time:
 		v = x.Truncate(time.Second)
+	}
+	if !reflect.TypeOf(v).Comparable() {
+		return &ColumnConverterError{
+			Op:   "AppendRow",
+			To:   string(col.chType),
+			From: fmt.Sprintf("%T", v),
+		}
 	}
 	if _, found := col.append.index[v]; !found {
 		if err := col.index.AppendRow(v); err != nil {
@@ -150,8 +182,37 @@ func (col *LowCardinality) AppendRow(v any) error {
 		}
 		col.append.index[v] = col.index.Rows() - 1
 	}
-	col.append.keys = append(col.append.keys, col.append.index[v])
+	col.appendKey(col.append.index[v])
 	return nil
+}
+
+func (col *LowCardinality) appendBorrowed(value []byte) error {
+	hash := maphash.Bytes(col.append.hashSeed, value)
+	for _, entry := range col.append.borrowedIndex[hash] {
+		if bytes.Equal(entry.value, value) {
+			col.appendKey(entry.index)
+			return nil
+		}
+	}
+
+	if err := col.index.AppendRow(BorrowedBytes(value)); err != nil {
+		return err
+	}
+	if len(value) == 0 {
+		value = nil
+	}
+	index := col.index.Rows() - 1
+	col.append.borrowedIndex[hash] = append(col.append.borrowedIndex[hash], borrowedLowCardinalityEntry{
+		value: value,
+		index: index,
+	})
+	col.appendKey(index)
+	return nil
+}
+
+func (col *LowCardinality) appendKey(index int) {
+	col.append.keys = append(col.append.keys, index)
+	col.rows++
 }
 
 func (col *LowCardinality) Decode(reader *proto.Reader, rows int) error {
@@ -202,10 +263,34 @@ func (col *LowCardinality) Encode(buffer *proto.Buffer) {
 	if col.rows == 0 {
 		return
 	}
-	defer func() {
-		col.append.keys, col.append.index = nil, nil
-	}()
-	ixLen := uint64(len(col.append.index))
+	defer col.clearAppendState()
+	keys := col.prepareKeys()
+	buffer.PutUInt64(updateAll | uint64(col.key))
+	buffer.PutInt64(int64(col.index.Rows()))
+	col.index.Encode(buffer)
+	buffer.PutInt64(int64(keys.Rows()))
+	keys.Encode(buffer)
+}
+
+func (col *LowCardinality) Write(writer *proto.Writer) {
+	if col.rows == 0 {
+		return
+	}
+	defer col.clearAppendState()
+	keys := col.prepareKeys()
+	writer.ChainBuffer(func(buffer *proto.Buffer) {
+		buffer.PutUInt64(updateAll | uint64(col.key))
+		buffer.PutInt64(int64(col.index.Rows()))
+	})
+	WriteData(writer, col.index)
+	writer.ChainBuffer(func(buffer *proto.Buffer) {
+		buffer.PutInt64(int64(keys.Rows()))
+		keys.Encode(buffer)
+	})
+}
+
+func (col *LowCardinality) prepareKeys() Interface {
+	ixLen := uint64(len(col.append.index) + col.borrowedIndexRows())
 	switch {
 	case col.keys().Rows() > 0:
 		// We already have keys, so this column is probably in a block directly decoded from the server, and we should
@@ -231,12 +316,21 @@ func (col *LowCardinality) Encode(buffer *proto.Buffer) {
 			col.keys64.AppendRow(uint64(v))
 		}
 	}
-	buffer.PutUInt64(updateAll | uint64(col.key))
-	buffer.PutInt64(int64(col.index.Rows()))
-	col.index.Encode(buffer)
-	keys := col.keys()
-	buffer.PutInt64(int64(keys.Rows()))
-	keys.Encode(buffer)
+	return col.keys()
+}
+
+func (col *LowCardinality) borrowedIndexRows() int {
+	rows := 0
+	for _, entries := range col.append.borrowedIndex {
+		rows += len(entries)
+	}
+	return rows
+}
+
+func (col *LowCardinality) clearAppendState() {
+	col.append.keys = nil
+	col.append.index = nil
+	col.append.borrowedIndex = nil
 }
 
 func (col *LowCardinality) ReadStatePrefix(reader *proto.Reader) error {
@@ -287,4 +381,5 @@ func (col *LowCardinality) indexRowNum(row int) int {
 var (
 	_ Interface           = (*LowCardinality)(nil)
 	_ CustomSerialization = (*LowCardinality)(nil)
+	_ CustomWriting       = (*LowCardinality)(nil)
 )

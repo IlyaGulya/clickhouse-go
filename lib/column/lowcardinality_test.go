@@ -1,12 +1,94 @@
 package column
 
 import (
+	"bytes"
 	"testing"
 
 	chproto "github.com/ClickHouse/ch-go/proto"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestLowCardinalityBorrowedString(t *testing.T) {
+	col, err := Type("LowCardinality(String)").Column("test", nil)
+	require.NoError(t, err)
+	lc := col.(*LowCardinality)
+
+	first := BorrowedBytes("payload")
+	second := BorrowedBytes("payload")
+	require.NoError(t, lc.AppendRow(first))
+	require.NoError(t, lc.AppendRow(second))
+	require.Equal(t, 2, lc.Rows())
+	require.Len(t, lc.append.borrowedIndex, 1)
+
+	index := lc.index.(*String)
+	require.Equal(t, 2, index.Rows())
+	require.Same(t, &first[0], &index.borrowed.RowBytes(1)[0])
+	require.Equal(t, []int{1, 1}, lc.append.keys)
+}
+
+func TestLowCardinalityBorrowedStringDoesNotRetainEmptyBackingArray(t *testing.T) {
+	col, err := Type("LowCardinality(String)").Column("test", nil)
+	require.NoError(t, err)
+	lc := col.(*LowCardinality)
+
+	value := BorrowedBytes(make([]byte, 0, 1<<20))
+	require.NoError(t, lc.AppendRow(value))
+	require.Len(t, lc.append.borrowedIndex, 1)
+	for _, entries := range lc.append.borrowedIndex {
+		require.Len(t, entries, 1)
+		require.Nil(t, entries[0].value)
+	}
+}
+
+func TestLowCardinalityBorrowedStringRejectsMixedOwnershipWithoutAddingRow(t *testing.T) {
+	col, err := Type("LowCardinality(String)").Column("test", nil)
+	require.NoError(t, err)
+	lc := col.(*LowCardinality)
+
+	require.NoError(t, lc.AppendRow(BorrowedBytes("borrowed")))
+	require.ErrorContains(t, lc.AppendRow("owned"), "cannot mix")
+	require.Equal(t, 1, lc.Rows())
+	require.Len(t, lc.append.keys, 1)
+}
+
+func TestLowCardinalityWriteMatchesEncode(t *testing.T) {
+	for _, typeOf := range []Type{
+		"LowCardinality(String)",
+		"LowCardinality(Nullable(String))",
+	} {
+		t.Run(string(typeOf), func(t *testing.T) {
+			encoded := appendLowCardinalityBorrowedRows(t, typeOf)
+			streamed := appendLowCardinalityBorrowedRows(t, typeOf)
+
+			var expected chproto.Buffer
+			encoded.Encode(&expected)
+			var actual bytes.Buffer
+			writer := chproto.NewStreamingWriter(&actual, new(chproto.Buffer))
+			WriteData(writer, streamed)
+			_, err := writer.Flush()
+			require.NoError(t, err)
+			require.Equal(t, expected.Buf, actual.Bytes())
+		})
+	}
+}
+
+func appendLowCardinalityBorrowedRows(t *testing.T, typeOf Type) *LowCardinality {
+	t.Helper()
+	col, err := typeOf.Column("test", nil)
+	require.NoError(t, err)
+	lc := col.(*LowCardinality)
+	for _, value := range []any{
+		BorrowedBytes("first"),
+		BorrowedBytes("second"),
+		BorrowedBytes("first"),
+		nil,
+		BorrowedBytes(nil),
+	} {
+		require.NoError(t, lc.AppendRow(value))
+	}
+	return lc
+}
 
 func TestLowCardinalityAppendAnySlice(t *testing.T) {
 	col, err := Type("LowCardinality(String)").Column("test", nil)

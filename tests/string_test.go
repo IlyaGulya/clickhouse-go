@@ -31,7 +31,10 @@ func TestBorrowedString(t *testing.T) {
 		CREATE TABLE test_borrowed_string (
 			value String,
 			nullable_value Nullable(String),
-			array_value Array(String)
+			array_value Array(String),
+			low_cardinality_value LowCardinality(String),
+			nullable_low_cardinality_value LowCardinality(Nullable(String)),
+			low_cardinality_array Array(LowCardinality(String))
 		) Engine MergeTree() ORDER BY tuple()
 		`
 		t.Cleanup(func() {
@@ -52,8 +55,18 @@ func TestBorrowedString(t *testing.T) {
 				clickhouse.BorrowBytes(firstArrayValue),
 				clickhouse.BorrowBytes(secondArrayValue),
 			},
+			clickhouse.BorrowBytes(value),
+			clickhouse.BorrowBytes(nullableValue),
+			[]clickhouse.BorrowedBytes{
+				clickhouse.BorrowBytes(firstArrayValue),
+				clickhouse.BorrowBytes(secondArrayValue),
+				clickhouse.BorrowBytes(firstArrayValue),
+			},
 		))
 		require.NoError(t, batch.Append(
+			clickhouse.BorrowBytes(nil),
+			nil,
+			[]clickhouse.BorrowedBytes{},
 			clickhouse.BorrowBytes(nil),
 			nil,
 			[]clickhouse.BorrowedBytes{},
@@ -61,7 +74,8 @@ func TestBorrowedString(t *testing.T) {
 		require.NoError(t, batch.Send())
 
 		rows, err := conn.Query(ctx, `
-			SELECT value, nullable_value, array_value
+			SELECT value, nullable_value, array_value,
+				low_cardinality_value, nullable_low_cardinality_value, low_cardinality_array
 			FROM test_borrowed_string
 			ORDER BY length(value) DESC
 		`)
@@ -72,17 +86,42 @@ func TestBorrowedString(t *testing.T) {
 		var gotValue string
 		var gotNullable *string
 		var gotArray []string
-		require.NoError(t, rows.Scan(&gotValue, &gotNullable, &gotArray))
+		var gotLowCardinality string
+		var gotNullableLowCardinality *string
+		var gotLowCardinalityArray []string
+		require.NoError(t, rows.Scan(
+			&gotValue,
+			&gotNullable,
+			&gotArray,
+			&gotLowCardinality,
+			&gotNullableLowCardinality,
+			&gotLowCardinalityArray,
+		))
 		require.Equal(t, "payload", gotValue)
 		require.NotNil(t, gotNullable)
 		require.Equal(t, "nullable", *gotNullable)
 		require.Equal(t, []string{"first", "second"}, gotArray)
+		require.Equal(t, "payload", gotLowCardinality)
+		require.NotNil(t, gotNullableLowCardinality)
+		require.Equal(t, "nullable", *gotNullableLowCardinality)
+		require.Equal(t, []string{"first", "second", "first"}, gotLowCardinalityArray)
 
 		require.True(t, rows.Next())
-		require.NoError(t, rows.Scan(&gotValue, &gotNullable, &gotArray))
+		gotNullableLowCardinality = nil
+		require.NoError(t, rows.Scan(
+			&gotValue,
+			&gotNullable,
+			&gotArray,
+			&gotLowCardinality,
+			&gotNullableLowCardinality,
+			&gotLowCardinalityArray,
+		))
 		require.Empty(t, gotValue)
 		require.Nil(t, gotNullable)
 		require.Empty(t, gotArray)
+		require.Empty(t, gotLowCardinality)
+		require.Nil(t, gotNullableLowCardinality)
+		require.Empty(t, gotLowCardinalityArray)
 		require.NoError(t, rows.Err())
 	})
 }
