@@ -403,19 +403,24 @@ func createCompressionPool(compression *Compression) (Pool[HTTPReaderWriter], er
 	return pool, nil
 }
 
-func (h *httpConnect) writeData(block *proto.Block) error {
-	// Saving offset of compressible data
-	start := len(h.buffer.Buf)
-	if err := block.Encode(h.buffer, h.encodeRevision); err != nil {
+func (h *httpConnect) writeDataTo(dst io.Writer, block *proto.Block) error {
+	var compressed *compress.StreamWriter
+	if h.compression == CompressionLZ4 || h.compression == CompressionZSTD {
+		compressed = compress.NewStreamWriter(dst, h.blockCompressor)
+		dst = compressed
+	}
+
+	writer := chproto.NewStreamingWriter(dst, new(chproto.Buffer))
+	if err := block.Write(writer, h.encodeRevision); err != nil {
 		return fmt.Errorf("block encode: %w", err)
 	}
-	if h.compression == CompressionLZ4 || h.compression == CompressionZSTD {
-		// Performing compression. Supported and requires
-		data := h.buffer.Buf[start:]
-		if err := h.blockCompressor.Compress(data); err != nil {
+	if _, err := writer.Flush(); err != nil {
+		return fmt.Errorf("block write: %w", err)
+	}
+	if compressed != nil {
+		if err := compressed.Flush(); err != nil {
 			return fmt.Errorf("compress: %w", err)
 		}
-		h.buffer.Buf = append(h.buffer.Buf[:start], h.blockCompressor.Data...)
 	}
 	return nil
 }

@@ -1,6 +1,7 @@
 package clickhouse
 
 import (
+	"io"
 	"testing"
 
 	"github.com/ClickHouse/ch-go/compress"
@@ -53,7 +54,7 @@ func BenchmarkCompressedBorrowedStringBlock(b *testing.B) {
 		b.ReportMetric(float64(totalWireBytes)/float64(b.N), "wire-B/op")
 	})
 
-	b.Run("Streaming", func(b *testing.B) {
+	b.Run("NativeStreaming", func(b *testing.B) {
 		var totalCapacity, totalWireBytes int64
 		b.ReportAllocs()
 		b.ResetTimer()
@@ -73,5 +74,19 @@ func BenchmarkCompressedBorrowedStringBlock(b *testing.B) {
 		}
 		b.ReportMetric(float64(totalCapacity)/float64(b.N), "retained-B/op")
 		b.ReportMetric(float64(totalWireBytes)/float64(b.N), "wire-B/op")
+	})
+
+	b.Run("HTTPStreaming", func(b *testing.B) {
+		b.ReportAllocs()
+		b.ResetTimer()
+		for range b.N {
+			conn := &httpConnect{
+				compression:     CompressionLZ4,
+				blockCompressor: compress.NewWriter(compress.LevelZero, compress.LZ4),
+			}
+			if err := conn.writeDataTo(io.Discard, block); err != nil {
+				b.Fatal(err)
+			}
+		}
 	})
 }

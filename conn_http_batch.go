@@ -250,16 +250,15 @@ func (b *httpBatch) Send() (err error) {
 	connWriter := compressionWriter.reset(pipeWriter)
 
 	go func() {
-		var err error
-		defer pipeWriter.CloseWithError(err)
-		defer connWriter.Close()
-		b.conn.buffer.Reset()
-		if err = b.conn.writeData(b.block); err != nil {
+		if writeErr := b.conn.writeDataTo(connWriter, b.block); writeErr != nil {
+			_ = pipeWriter.CloseWithError(writeErr)
 			return
 		}
-		if _, err = connWriter.Write(b.conn.buffer.Buf); err != nil {
+		if closeErr := connWriter.Close(); closeErr != nil {
+			_ = pipeWriter.CloseWithError(closeErr)
 			return
 		}
+		_ = pipeWriter.Close()
 	}()
 
 	options.settings["query"] = b.query
