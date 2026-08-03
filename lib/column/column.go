@@ -78,6 +78,12 @@ type CustomSerialization interface {
 	WriteStatePrefix(*proto.Buffer) error
 }
 
+// CustomWriting allows input columns to stream their encoded representation
+// without first materializing it in a contiguous Buffer.
+type CustomWriting interface {
+	Write(*proto.Writer)
+}
+
 type ServerContext struct {
 	Revision     uint64
 	VersionMajor uint64

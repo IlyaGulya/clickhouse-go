@@ -294,30 +294,11 @@ func (c *connect) sendData(block *proto.Block, name string) error {
 	c.buffer.PutByte(proto.ClientData)
 	c.buffer.PutString(name)
 
-	compressionOffset := len(c.buffer.Buf)
-
-	if err := block.EncodeHeader(c.buffer, c.revision); err != nil {
-		return fmt.Errorf("send data: failed to encode block header (conn_id=%d): %w", c.id, err)
-	}
-
-	for i := range block.Columns {
-		if err := block.EncodeColumn(c.buffer, c.revision, i); err != nil {
-			return fmt.Errorf("send data: failed to encode column %d (conn_id=%d): %w", i, c.id, err)
+	if c.compression == CompressionNone {
+		if err := block.Encode(c.buffer, c.revision); err != nil {
+			return fmt.Errorf("send data: failed to encode block (conn_id=%d): %w", c.id, err)
 		}
-		if len(c.buffer.Buf) >= c.maxCompressionBuffer {
-			if err := c.compressBuffer(compressionOffset); err != nil {
-				return err
-			}
-			c.logger.Debug("buffer compressed",
-				slog.Int("buffer_bytes", len(c.buffer.Buf)))
-			if err := c.flush(); err != nil {
-				return fmt.Errorf("send data: failed to flush partial block (conn_id=%d, col=%d): %w", c.id, i, err)
-			}
-			compressionOffset = 0
-		}
-	}
-
-	if err := c.compressBuffer(compressionOffset); err != nil {
+	} else if err := c.writeCompressedBlock(block); err != nil {
 		return err
 	}
 
@@ -367,6 +348,41 @@ func (c *connect) sendData(block *proto.Block, name string) error {
 	}()
 
 	return nil
+}
+
+func (c *connect) writeCompressedBlock(block *proto.Block) error {
+	stream := compress.NewStreamWriter(compressedBlockSink{connect: c}, c.compressor)
+	writer := chproto.NewStreamingWriter(stream, new(chproto.Buffer))
+
+	if err := block.WriteHeader(writer, c.revision); err != nil {
+		return fmt.Errorf("send data: failed to encode block header (conn_id=%d): %w", c.id, err)
+	}
+	for i := range block.Columns {
+		if err := block.WriteColumn(writer, c.revision, i); err != nil {
+			return fmt.Errorf("send data: failed to encode column %d (conn_id=%d): %w", i, c.id, err)
+		}
+	}
+	if _, err := writer.Flush(); err != nil {
+		return fmt.Errorf("send data: failed to stream block (conn_id=%d): %w", c.id, err)
+	}
+	if err := stream.Flush(); err != nil {
+		return fmt.Errorf("send data: failed to flush compressed block (conn_id=%d): %w", c.id, err)
+	}
+	return nil
+}
+
+type compressedBlockSink struct {
+	connect *connect
+}
+
+func (w compressedBlockSink) Write(p []byte) (int, error) {
+	w.connect.buffer.PutRaw(p)
+	if w.connect.maxCompressionBuffer > 0 && len(w.connect.buffer.Buf) >= w.connect.maxCompressionBuffer {
+		if err := w.connect.flush(); err != nil {
+			return 0, err
+		}
+	}
+	return len(p), nil
 }
 
 func serverVersionToContext(v ServerVersion) column.ServerContext {

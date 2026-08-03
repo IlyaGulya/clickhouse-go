@@ -14,7 +14,7 @@ func TestStringAppendRowBorrowedBytes(t *testing.T) {
 
 	require.NoError(t, col.AppendRow(BorrowedBytes(payload)))
 	require.Empty(t, col.col.Buf)
-	require.Same(t, &payload[0], &col.col.RowBytes(0)[0])
+	require.Same(t, &payload[0], &col.borrowed.RowBytes(0)[0])
 
 	payload[0] = 'P'
 	var encoded proto.Buffer
@@ -33,8 +33,43 @@ func TestStringAppendBorrowedBytesColumn(t *testing.T) {
 	nulls, err := col.Append([]BorrowedBytes{first, second})
 	require.NoError(t, err)
 	require.Equal(t, []uint8{0, 0}, nulls)
-	require.Equal(t, "first", col.col.Row(0))
-	require.Equal(t, "second", col.col.Row(1))
+	require.Equal(t, "first", col.Row(0, false))
+	require.Equal(t, "second", col.Row(1, false))
+}
+
+func TestStringBorrowedModeHandlesLeadingNulls(t *testing.T) {
+	payload := BorrowedBytes("payload")
+	col := new(String)
+
+	require.NoError(t, col.AppendRow(nil))
+	require.NoError(t, col.AppendRow(payload))
+	require.Equal(t, 2, col.Rows())
+	require.Empty(t, col.borrowed.RowBytes(0))
+	require.Equal(t, []byte("payload"), col.borrowed.RowBytes(1))
+}
+
+func TestStringRejectsMixedOwnershipModes(t *testing.T) {
+	t.Run("OwnedThenBorrowed", func(t *testing.T) {
+		col := new(String)
+		require.NoError(t, col.AppendRow([]byte("owned")))
+		require.ErrorContains(t, col.AppendRow(BorrowedBytes("borrowed")), "cannot mix")
+	})
+
+	t.Run("BorrowedThenOwned", func(t *testing.T) {
+		col := new(String)
+		require.NoError(t, col.AppendRow(BorrowedBytes("borrowed")))
+		require.ErrorContains(t, col.AppendRow([]byte("owned")), "cannot mix")
+	})
+}
+
+func TestStringResetReleasesBorrowedValues(t *testing.T) {
+	col := new(String)
+	require.NoError(t, col.AppendRow(BorrowedBytes("payload")))
+	col.Reset()
+
+	require.Zero(t, col.Rows())
+	require.Empty(t, col.borrowed.Values)
+	require.Equal(t, stringInputUndecided, col.inputMode)
 }
 
 func BenchmarkStringAppendLargeBytes(b *testing.B) {
