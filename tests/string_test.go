@@ -127,47 +127,6 @@ func TestBorrowedString(t *testing.T) {
 	})
 }
 
-func TestBorrowedLowCardinalityRepeatedSend(t *testing.T) {
-	conn, err := GetNativeConnection(t, clickhouse.Native, nil, nil, &clickhouse.Compression{
-		Method: clickhouse.CompressionLZ4,
-	})
-	require.NoError(t, err)
-
-	ctx := context.Background()
-	const table = "test_borrowed_low_cardinality_repeated_send"
-	require.NoError(t, conn.Exec(ctx, "CREATE TABLE "+table+" (value LowCardinality(String)) Engine MergeTree() ORDER BY tuple()"))
-	t.Cleanup(func() {
-		require.NoError(t, conn.Exec(ctx, "DROP TABLE IF EXISTS "+table))
-	})
-
-	first := []byte("same")
-	second := []byte("same")
-	batch, err := conn.PrepareBatch(ctx, "INSERT INTO "+table)
-	require.NoError(t, err)
-	require.NoError(t, batch.Append(clickhouse.BorrowBytes(first)))
-	require.NoError(t, batch.Append(clickhouse.BorrowBytes(second)))
-	require.NoError(t, batch.Send())
-	second[0] = 'X'
-	require.NoError(t, batch.Send())
-
-	rows, err := conn.Query(ctx, "SELECT value, count() FROM "+table+" GROUP BY value ORDER BY value")
-	require.NoError(t, err)
-	defer rows.Close()
-
-	require.True(t, rows.Next())
-	var value string
-	var count uint64
-	require.NoError(t, rows.Scan(&value, &count))
-	require.Equal(t, "Xame", value)
-	require.Equal(t, uint64(1), count)
-	require.True(t, rows.Next())
-	require.NoError(t, rows.Scan(&value, &count))
-	require.Equal(t, "same", value)
-	require.Equal(t, uint64(3), count)
-	require.False(t, rows.Next())
-	require.NoError(t, rows.Err())
-}
-
 func TestBorrowedStringCompressionBufferLimit(t *testing.T) {
 	conn, err := GetConnectionTCPWithOptions(testSet, nil, nil, &clickhouse.Compression{
 		Method: clickhouse.CompressionLZ4,

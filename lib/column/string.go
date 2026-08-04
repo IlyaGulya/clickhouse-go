@@ -33,7 +33,10 @@ const (
 // Append does not copy BorrowedBytes data to the column buffer.
 // Do not change the data until the batch Send returns.
 // If you do not send the batch, do not change the data until Abort or Close returns.
-// A Native batch can keep the value for another Send.
+// A successful Native Flush releases values in the current block.
+// An HTTP Flush does not send values. Keep them unchanged until Send, Abort,
+// or Close returns.
+// If Flush fails, keep the values unchanged until Abort or Close returns.
 // Append records the current pointer and length.
 // BorrowedBytes(nil) encodes an empty String. It does not encode SQL NULL.
 type BorrowedBytes []byte

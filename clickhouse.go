@@ -34,8 +34,10 @@ type (
 // Do not change or reuse v until Send returns.
 // If you do not send the batch, do not change v until Abort or Close returns.
 // Use []byte if you cannot keep v unchanged for this period.
-// A Native batch keeps appended values for another Send.
-// Each Send reads the current data in v.
+// A successful Native Flush releases values in the current block.
+// An HTTP Flush does not send values. Keep them unchanged until Send, Abort,
+// or Close returns.
+// If Flush fails, keep the values unchanged until Abort or Close returns.
 // Append records the current pointer and length of v.
 // A later assignment or reslice of v does not change the appended value.
 // BorrowBytes(nil) encodes an empty String. It does not encode SQL NULL.

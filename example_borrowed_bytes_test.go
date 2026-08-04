@@ -13,8 +13,7 @@ func ExampleBorrowBytes() {
 	// Add a value to a String, Nullable(String), Array(String), or
 	// LowCardinality(String) batch column. Do not change payload until
 	// batch.Send returns. If you do not send the batch, do not change payload
-	// until batch.Abort or batch.Close returns. You can send a Native batch more
-	// than once. Each Send reads the current data in payload.
+	// until batch.Abort or batch.Close returns.
 	fmt.Println(string(value))
 
 	// Output: large payload
