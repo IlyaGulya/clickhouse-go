@@ -369,7 +369,7 @@ func (col *LowCardinality) Encode(buffer *proto.Buffer) {
 	keys.Encode(buffer)
 }
 
-func (col *LowCardinality) Write(writer *proto.Writer) {
+func (col *LowCardinality) write(writer *proto.Writer) {
 	if col.rows == 0 {
 		return
 	}
@@ -526,5 +526,5 @@ func (col *LowCardinality) indexRowNum(row int) int {
 var (
 	_ Interface           = (*LowCardinality)(nil)
 	_ CustomSerialization = (*LowCardinality)(nil)
-	_ CustomWriting       = (*LowCardinality)(nil)
+	_ customWriter        = (*LowCardinality)(nil)
 )

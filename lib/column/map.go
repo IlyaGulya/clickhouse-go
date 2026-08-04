@@ -273,7 +273,7 @@ func (col *Map) Encode(buffer *proto.Buffer) {
 	col.values.Encode(buffer)
 }
 
-func (col *Map) Write(writer *proto.Writer) {
+func (col *Map) write(writer *proto.Writer) {
 	writer.ChainBuffer(col.offsets.col.EncodeColumn)
 	WriteData(writer, col.keys)
 	WriteData(writer, col.values)
@@ -359,5 +359,5 @@ func (col *Map) orderedRow(n int) ([]any, []any) {
 var (
 	_ Interface           = (*Map)(nil)
 	_ CustomSerialization = (*Map)(nil)
-	_ CustomWriting       = (*Map)(nil)
+	_ customWriter        = (*Map)(nil)
 )

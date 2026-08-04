@@ -61,7 +61,7 @@ func (col *SimpleAggregateFunction) Encode(buffer *proto.Buffer) {
 	col.base.Encode(buffer)
 }
 
-func (col *SimpleAggregateFunction) Write(writer *proto.Writer) {
+func (col *SimpleAggregateFunction) write(writer *proto.Writer) {
 	WriteData(writer, col.base)
 }
 
@@ -87,4 +87,4 @@ func (col *SimpleAggregateFunction) WriteStatePrefix(buffer *proto.Buffer) error
 
 var _ Interface = (*SimpleAggregateFunction)(nil)
 var _ CustomSerialization = (*SimpleAggregateFunction)(nil)
-var _ CustomWriting = (*SimpleAggregateFunction)(nil)
+var _ customWriter = (*SimpleAggregateFunction)(nil)

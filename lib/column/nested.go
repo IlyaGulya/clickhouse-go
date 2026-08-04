@@ -88,11 +88,11 @@ func (col *Nested) WriteStatePrefix(buffer *proto.Buffer) error {
 	return nil
 }
 
-func (col *Nested) Write(writer *proto.Writer) {
+func (col *Nested) write(writer *proto.Writer) {
 	WriteData(writer, col.Interface)
 }
 
 var (
-	_ Interface     = (*Nested)(nil)
-	_ CustomWriting = (*Nested)(nil)
+	_ Interface    = (*Nested)(nil)
+	_ customWriter = (*Nested)(nil)
 )

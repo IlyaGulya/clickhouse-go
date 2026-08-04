@@ -429,10 +429,7 @@ func (col *String) Encode(buffer *proto.Buffer) {
 	col.col.EncodeColumn(buffer)
 }
 
-// Write sends String input to writer.
-// In borrowed mode, it chains caller-owned values without a copy.
-// In owned mode, it uses ColStr.
-func (col *String) Write(writer *proto.Writer) {
+func (col *String) write(writer *proto.Writer) {
 	col.finalizeInputMode()
 	if col.inputMode == stringInputBorrowed {
 		col.borrowed.WriteColumn(writer)
@@ -442,4 +439,4 @@ func (col *String) Write(writer *proto.Writer) {
 }
 
 var _ Interface = (*String)(nil)
-var _ CustomWriting = (*String)(nil)
+var _ customWriter = (*String)(nil)

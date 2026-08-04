@@ -119,7 +119,7 @@ func writeAndDecodeLowCardinalityStrings(t *testing.T, source *LowCardinality) [
 	t.Helper()
 	var encoded bytes.Buffer
 	writer := chproto.NewStreamingWriter(&encoded, new(chproto.Buffer))
-	source.Write(writer)
+	source.write(writer)
 	_, err := writer.Flush()
 	require.NoError(t, err)
 	return decodeLowCardinalityStrings(t, source.Rows(), encoded.Bytes())

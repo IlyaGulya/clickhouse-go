@@ -92,7 +92,7 @@ func FuzzStringBorrowedMatchesOwned(f *testing.F) {
 
 		var streamed bytes.Buffer
 		writer := proto.NewStreamingWriter(&streamed, new(proto.Buffer))
-		borrowed.Write(writer)
+		borrowed.write(writer)
 		if _, err := writer.Flush(); err != nil {
 			t.Fatalf("flush borrowed String: %v", err)
 		}

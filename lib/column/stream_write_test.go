@@ -66,7 +66,7 @@ func TestCompositeColumnsPreserveStreamingWrites(t *testing.T) {
 			for _, row := range tt.rows {
 				require.NoError(t, col.AppendRow(row))
 			}
-			require.Implements(t, (*CustomWriting)(nil), col)
+			require.Implements(t, (*customWriter)(nil), col)
 			requireColumnWriteMatchesEncode(t, col)
 		})
 	}

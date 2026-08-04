@@ -47,7 +47,7 @@ func FuzzLowCardinalityBorrowedMatchesOwned(f *testing.F) {
 
 		var streamedBytes bytes.Buffer
 		writer := proto.NewStreamingWriter(&streamedBytes, new(proto.Buffer))
-		streamed.Write(writer)
+		streamed.write(writer)
 		if _, err := writer.Flush(); err != nil {
 			t.Fatalf("flush LowCardinality stream: %v", err)
 		}

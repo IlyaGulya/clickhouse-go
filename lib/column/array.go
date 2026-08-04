@@ -235,7 +235,7 @@ func (col *Array) Encode(buffer *proto.Buffer) {
 	col.values.Encode(buffer)
 }
 
-func (col *Array) Write(writer *proto.Writer) {
+func (col *Array) write(writer *proto.Writer) {
 	for _, offset := range col.offsets {
 		writer.ChainBuffer(offset.values.col.EncodeColumn)
 	}
@@ -488,5 +488,5 @@ func (col *Array) scanSliceOfStructs(sliceType reflect.Type, row int) (reflect.V
 var (
 	_ Interface           = (*Array)(nil)
 	_ CustomSerialization = (*Array)(nil)
-	_ CustomWriting       = (*Array)(nil)
+	_ customWriter        = (*Array)(nil)
 )

@@ -168,7 +168,7 @@ func (col *Nullable) Encode(buffer *proto.Buffer) {
 	col.base.Encode(buffer)
 }
 
-func (col *Nullable) Write(writer *proto.Writer) {
+func (col *Nullable) write(writer *proto.Writer) {
 	if col.enable {
 		writer.ChainBuffer(col.nulls.EncodeColumn)
 	}
@@ -196,4 +196,4 @@ func (col *Nullable) WriteStatePrefix(buffer *proto.Buffer) error {
 }
 
 var _ Interface = (*Nullable)(nil)
-var _ CustomWriting = (*Nullable)(nil)
+var _ customWriter = (*Nullable)(nil)
