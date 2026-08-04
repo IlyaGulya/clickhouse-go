@@ -55,7 +55,8 @@ type LowCardinality struct {
 		stringIndex map[uint64][]lowCardinalityStringEntry
 		hashSeed    maphash.Seed
 	}
-	name string
+	stringRows []lowCardinalityStringRow
+	name       string
 }
 
 type lowCardinalityStringEntry struct {
@@ -63,6 +64,13 @@ type lowCardinalityStringEntry struct {
 	bytes    []byte
 	owned    string
 	index    int
+}
+
+type lowCardinalityStringRow struct {
+	borrowed bool
+	null     bool
+	bytes    []byte
+	owned    string
 }
 
 func (col *LowCardinality) Reset() {
@@ -75,6 +83,8 @@ func (col *LowCardinality) Reset() {
 	col.append.index = make(map[any]int)
 	col.append.stringIndex = make(map[uint64][]lowCardinalityStringEntry)
 	col.append.keys = col.append.keys[:0]
+	clear(col.stringRows)
+	col.stringRows = col.stringRows[:0]
 }
 
 func (col *LowCardinality) Name() string {
@@ -172,16 +182,19 @@ func (col *LowCardinality) AppendRow(v any) error {
 	// second check is unfortunate - but we could be passed a *type(nil) e.g. via LowCardinality(Nullable(String))
 	if v == nil || (reflect.ValueOf(v).Kind() == reflect.Ptr && reflect.ValueOf(v).IsNil()) {
 		col.appendKey(0)
+		if col.stringValues {
+			col.stringRows = append(col.stringRows, lowCardinalityStringRow{null: true})
+		}
 		return nil
 	}
 	switch value := v.(type) {
 	case BorrowedBytes:
-		return col.appendBorrowed(value)
+		return col.appendBorrowed(value, true)
 	case *BorrowedBytes:
-		return col.appendBorrowed(*value)
+		return col.appendBorrowed(*value, true)
 	case string:
 		if col.stringValues {
-			return col.appendOwnedString(value)
+			return col.appendOwnedString(value, true)
 		}
 	}
 	switch x := v.(type) {
@@ -201,24 +214,31 @@ func (col *LowCardinality) AppendRow(v any) error {
 		}
 		col.append.index[v] = col.index.Rows() - 1
 	}
-	col.appendKey(col.append.index[v])
+	index := col.append.index[v]
+	col.appendKey(index)
+	if col.stringValues {
+		col.stringRows = append(col.stringRows, lowCardinalityStringRow{owned: col.stringIndexValue(index)})
+	}
 	return nil
 }
 
-func (col *LowCardinality) appendBorrowed(value []byte) error {
+func (col *LowCardinality) appendBorrowed(value []byte, record bool) error {
+	if len(value) == 0 {
+		value = nil
+	}
 	hash := maphash.Bytes(col.append.hashSeed, value)
 	for _, entry := range col.append.stringIndex[hash] {
 		if entry.matchesBytes(value) {
 			col.appendKey(entry.index)
+			if record {
+				col.stringRows = append(col.stringRows, lowCardinalityStringRow{borrowed: true, bytes: value})
+			}
 			return nil
 		}
 	}
 
 	if err := col.index.AppendRow(BorrowedBytes(value)); err != nil {
 		return err
-	}
-	if len(value) == 0 {
-		value = nil
 	}
 	index := col.index.Rows() - 1
 	col.append.stringIndex[hash] = append(col.append.stringIndex[hash], lowCardinalityStringEntry{
@@ -227,14 +247,20 @@ func (col *LowCardinality) appendBorrowed(value []byte) error {
 		index:    index,
 	})
 	col.appendKey(index)
+	if record {
+		col.stringRows = append(col.stringRows, lowCardinalityStringRow{borrowed: true, bytes: value})
+	}
 	return nil
 }
 
-func (col *LowCardinality) appendOwnedString(value string) error {
+func (col *LowCardinality) appendOwnedString(value string, record bool) error {
 	hash := maphash.String(col.append.hashSeed, value)
 	for _, entry := range col.append.stringIndex[hash] {
 		if entry.matchesString(value) {
 			col.appendKey(entry.index)
+			if record {
+				col.stringRows = append(col.stringRows, lowCardinalityStringRow{owned: value})
+			}
 			return nil
 		}
 	}
@@ -248,7 +274,17 @@ func (col *LowCardinality) appendOwnedString(value string) error {
 		index: index,
 	})
 	col.appendKey(index)
+	if record {
+		col.stringRows = append(col.stringRows, lowCardinalityStringRow{owned: value})
+	}
 	return nil
+}
+
+func (col *LowCardinality) stringIndexValue(index int) string {
+	if nullable, ok := col.index.(*Nullable); ok {
+		return nullable.Base().Row(index, false).(string)
+	}
+	return col.index.Row(index, false).(string)
 }
 
 func (entry lowCardinalityStringEntry) matchesBytes(value []byte) bool {
@@ -318,6 +354,7 @@ func (col *LowCardinality) Encode(buffer *proto.Buffer) {
 	if col.rows == 0 {
 		return
 	}
+	col.rebuildStringState()
 	defer col.clearAppendState()
 	keys := col.prepareKeys()
 	buffer.PutUInt64(updateAll | uint64(col.key))
@@ -331,6 +368,7 @@ func (col *LowCardinality) Write(writer *proto.Writer) {
 	if col.rows == 0 {
 		return
 	}
+	col.rebuildStringState()
 	defer col.clearAppendState()
 	keys := col.prepareKeys()
 	writer.ChainBuffer(func(buffer *proto.Buffer) {
@@ -342,6 +380,43 @@ func (col *LowCardinality) Write(writer *proto.Writer) {
 		buffer.PutInt64(int64(keys.Rows()))
 		keys.Encode(buffer)
 	})
+}
+
+func (col *LowCardinality) rebuildStringState() {
+	if !col.stringValues || len(col.stringRows) != col.rows {
+		return
+	}
+	col.index.Reset()
+	col.keys8.Reset()
+	col.keys16.Reset()
+	col.keys32.Reset()
+	col.keys64.Reset()
+	col.append.index = make(map[any]int)
+	col.append.stringIndex = make(map[uint64][]lowCardinalityStringEntry)
+	col.append.keys = col.append.keys[:0]
+	col.rows = 0
+	if err := col.index.AppendRow(nil); err != nil {
+		panic(err)
+	}
+	if col.nullable {
+		if err := col.index.AppendRow(nil); err != nil {
+			panic(err)
+		}
+	}
+	for _, row := range col.stringRows {
+		switch {
+		case row.null:
+			col.appendKey(0)
+		case row.borrowed:
+			if err := col.appendBorrowed(row.bytes, false); err != nil {
+				panic(err)
+			}
+		default:
+			if err := col.appendOwnedString(row.owned, false); err != nil {
+				panic(err)
+			}
+		}
+	}
 }
 
 func (col *LowCardinality) prepareKeys() Interface {
