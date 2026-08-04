@@ -302,7 +302,9 @@ func (c *connect) sendData(block *proto.Block, name string) error {
 func (c *connect) handleDataWriteError(block *proto.Block, err error) error {
 	var opErr *net.OpError
 	isOpErr := errors.As(err, &opErr)
-	c.setClosed()
+	if closeErr := c.close(); closeErr != nil {
+		c.logger.Debug("failed to close connection after write error", slog.Any("error", closeErr))
+	}
 
 	switch {
 	case errors.Is(err, syscall.EPIPE):

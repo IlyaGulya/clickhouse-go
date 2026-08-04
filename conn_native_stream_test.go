@@ -61,6 +61,7 @@ func TestSendDataClosesConnectionAfterShortWrite(t *testing.T) {
 	err := conn.sendData(block, "")
 	require.ErrorIs(t, err, io.ErrShortWrite)
 	require.True(t, conn.isClosed())
+	require.Equal(t, 1, transport.closeCalls)
 }
 
 func TestBatchFlushReleasesConnectionAfterShortWrite(t *testing.T) {
@@ -172,6 +173,12 @@ type recordingNetConn struct {
 	writeSizes []int
 	data       []byte
 	shortWrite bool
+	closeCalls int
+}
+
+func (c *recordingNetConn) Close() error {
+	c.closeCalls++
+	return c.mockNetConn.Close()
 }
 
 func (c *recordingNetConn) Write(p []byte) (int, error) {
