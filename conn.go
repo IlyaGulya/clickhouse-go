@@ -282,61 +282,58 @@ func (c *connect) sendData(block *proto.Block, name string) error {
 		slog.Int("rows", block.Rows()))
 	c.buffer.PutByte(proto.ClientData)
 	c.buffer.PutString(name)
+	defer c.buffer.Reset()
 
 	if c.compression == CompressionNone {
 		if err := c.writeUncompressedBlock(block); err != nil {
-			return err
+			return c.handleDataWriteError(block, err)
 		}
 	} else if err := c.writeCompressedBlock(block); err != nil {
-		return err
+		return c.handleDataWriteError(block, err)
 	}
 
 	if err := c.flush(); err != nil {
-		var opErr *net.OpError
-		isOpErr := errors.As(err, &opErr)
-
-		switch {
-		case errors.Is(err, syscall.EPIPE):
-			c.logger.Error("connection broken: pipe error",
-				slog.Any("error", err),
-				slog.Int("block_columns", len(block.Columns)),
-				slog.Int("block_rows", block.Rows()))
-			c.setClosed()
-			return fmt.Errorf("send data: connection broken (EPIPE) to %s (conn_id=%d, block_cols=%d, block_rows=%d): %w",
-				c.conn.RemoteAddr(), c.id, len(block.Columns), block.Rows(), err)
-		case errors.Is(err, io.EOF):
-			c.logger.Error("connection closed unexpectedly",
-				slog.Any("error", err),
-				slog.Int("block_columns", len(block.Columns)),
-				slog.Int("block_rows", block.Rows()))
-			c.setClosed()
-			return fmt.Errorf("send data: unexpected EOF to %s (conn_id=%d, block_cols=%d, block_rows=%d): %w",
-				c.conn.RemoteAddr(), c.id, len(block.Columns), block.Rows(), err)
-		case isOpErr:
-			// *net.OpError not already caught by more specific EPIPE/EOF check
-			c.logger.Error("connection broken: write error",
-				slog.Any("error", err),
-				slog.Int("block_columns", len(block.Columns)),
-				slog.Int("block_rows", block.Rows()))
-			c.setClosed()
-			return fmt.Errorf("send data: write error to %s (conn_id=%d, block_cols=%d, block_rows=%d): %w",
-				c.conn.RemoteAddr(), c.id, len(block.Columns), block.Rows(), err)
-		default:
-			c.logger.Error("send data failed",
-				slog.Any("error", err),
-				slog.Int("block_columns", len(block.Columns)),
-				slog.Int("block_rows", block.Rows()))
-			c.setClosed()
-			return fmt.Errorf("send data: write error to %s (conn_id=%d, block_cols=%d, block_rows=%d): %w",
-				c.conn.RemoteAddr(), c.id, len(block.Columns), block.Rows(), err)
-		}
+		return c.handleDataWriteError(block, err)
 	}
 
-	defer func() {
-		c.buffer.Reset()
-	}()
-
 	return nil
+}
+
+func (c *connect) handleDataWriteError(block *proto.Block, err error) error {
+	var opErr *net.OpError
+	isOpErr := errors.As(err, &opErr)
+	c.setClosed()
+
+	switch {
+	case errors.Is(err, syscall.EPIPE):
+		c.logger.Error("connection broken: pipe error",
+			slog.Any("error", err),
+			slog.Int("block_columns", len(block.Columns)),
+			slog.Int("block_rows", block.Rows()))
+		return fmt.Errorf("send data: connection broken (EPIPE) to %s (conn_id=%d, block_cols=%d, block_rows=%d): %w",
+			c.conn.RemoteAddr(), c.id, len(block.Columns), block.Rows(), err)
+	case errors.Is(err, io.EOF):
+		c.logger.Error("connection closed unexpectedly",
+			slog.Any("error", err),
+			slog.Int("block_columns", len(block.Columns)),
+			slog.Int("block_rows", block.Rows()))
+		return fmt.Errorf("send data: unexpected EOF to %s (conn_id=%d, block_cols=%d, block_rows=%d): %w",
+			c.conn.RemoteAddr(), c.id, len(block.Columns), block.Rows(), err)
+	case isOpErr:
+		c.logger.Error("connection broken: write error",
+			slog.Any("error", err),
+			slog.Int("block_columns", len(block.Columns)),
+			slog.Int("block_rows", block.Rows()))
+		return fmt.Errorf("send data: write error to %s (conn_id=%d, block_cols=%d, block_rows=%d): %w",
+			c.conn.RemoteAddr(), c.id, len(block.Columns), block.Rows(), err)
+	default:
+		c.logger.Error("send data failed",
+			slog.Any("error", err),
+			slog.Int("block_columns", len(block.Columns)),
+			slog.Int("block_rows", block.Rows()))
+		return fmt.Errorf("send data: write error to %s (conn_id=%d, block_cols=%d, block_rows=%d): %w",
+			c.conn.RemoteAddr(), c.id, len(block.Columns), block.Rows(), err)
+	}
 }
 
 func (c *connect) writeUncompressedBlock(block *proto.Block) error {

@@ -2,6 +2,7 @@ package clickhouse
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"testing"
@@ -50,6 +51,64 @@ func TestWriteUncompressedBlockPropagatesShortWrite(t *testing.T) {
 	err := conn.writeUncompressedBlock(block)
 	require.Error(t, err)
 	require.ErrorIs(t, err, io.ErrShortWrite)
+}
+
+func TestSendDataClosesConnectionAfterShortWrite(t *testing.T) {
+	transport := &recordingNetConn{shortWrite: true}
+	conn := newShortWriteConnect(transport)
+	block := newStringBlock(t)
+
+	err := conn.sendData(block, "")
+	require.ErrorIs(t, err, io.ErrShortWrite)
+	require.True(t, conn.isClosed())
+}
+
+func TestBatchFlushReleasesConnectionAfterShortWrite(t *testing.T) {
+	transport := &recordingNetConn{shortWrite: true}
+	conn := newShortWriteConnect(transport)
+	block := newStringBlock(t)
+	reacquireErr := errors.New("get new connection")
+	var releaseErr error
+	batch := &batch{
+		ctx:   context.Background(),
+		conn:  conn,
+		block: block,
+		connRelease: func(_ *connect, err error) {
+			releaseErr = err
+		},
+		connAcquire: func(context.Context) (*connect, error) {
+			return nil, reacquireErr
+		},
+	}
+
+	err := batch.Flush()
+	require.ErrorIs(t, err, io.ErrShortWrite)
+	require.ErrorIs(t, releaseErr, io.ErrShortWrite)
+	require.True(t, batch.released)
+	writes := len(transport.writeSizes)
+
+	err = batch.Flush()
+	require.ErrorIs(t, err, reacquireErr)
+	require.Len(t, transport.writeSizes, writes)
+}
+
+func newShortWriteConnect(transport *recordingNetConn) *connect {
+	return &connect{
+		conn:        transport,
+		buffer:      new(chproto.Buffer),
+		revision:    ClientTCPProtocolVersion,
+		compression: CompressionNone,
+		logger:      newNoopLogger(),
+		opt:         &Options{},
+	}
+}
+
+func newStringBlock(t *testing.T) *proto.Block {
+	t.Helper()
+	block := proto.NewBlock()
+	require.NoError(t, block.AddColumn("value", column.Type("String")))
+	require.NoError(t, block.Append("payload"))
+	return block
 }
 
 func TestCompressedBlockSinkHonorsBufferLimit(t *testing.T) {

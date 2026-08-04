@@ -2,13 +2,11 @@ package clickhouse
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"regexp"
 	"slices"
-	"syscall"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/column"
@@ -282,10 +280,7 @@ func (b *batch) Flush() error {
 	}
 	if b.block.Rows() != 0 {
 		if err := b.conn.sendData(b.block, ""); err != nil {
-			// broken pipe/conn reset aren't generally recoverable on retry
-			if errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ECONNRESET) {
-				b.release(err)
-			}
+			b.release(err)
 			return err
 		}
 		if b.closeOnFlush {
