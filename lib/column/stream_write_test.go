@@ -49,6 +49,14 @@ func TestCompositeColumnsPreserveStreamingWrites(t *testing.T) {
 			typeOf: "SimpleAggregateFunction(anyLast, String)",
 			rows:   []any{BorrowedBytes("first"), BorrowedBytes("second")},
 		},
+		{
+			name:   "NestedString",
+			typeOf: "Nested(value String)",
+			rows: []any{
+				[]map[string]any{{"value": BorrowedBytes("first")}},
+				[]map[string]any{{"value": BorrowedBytes("second")}},
+			},
+		},
 	}
 
 	for _, tt := range tests {
