@@ -73,6 +73,11 @@ type lowCardinalityStringRow struct {
 	owned    string
 }
 
+type lowCardinalityBorrowedSource struct {
+	data *byte
+	len  int
+}
+
 func (col *LowCardinality) Reset() {
 	col.rows = 0
 	col.index.Reset()
@@ -403,14 +408,24 @@ func (col *LowCardinality) rebuildStringState() {
 			panic(err)
 		}
 	}
+	borrowedSources := make(map[lowCardinalityBorrowedSource]int)
 	for _, row := range col.stringRows {
 		switch {
 		case row.null:
 			col.appendKey(0)
 		case row.borrowed:
+			source := lowCardinalityBorrowedSource{len: len(row.bytes)}
+			if len(row.bytes) > 0 {
+				source.data = &row.bytes[0]
+			}
+			if index, ok := borrowedSources[source]; ok {
+				col.appendKey(index)
+				continue
+			}
 			if err := col.appendBorrowed(row.bytes, false); err != nil {
 				panic(err)
 			}
+			borrowedSources[source] = col.append.keys[len(col.append.keys)-1]
 		default:
 			if err := col.appendOwnedString(row.owned, false); err != nil {
 				panic(err)
