@@ -106,6 +106,9 @@ func TestStringAppendBorrowedBytesColumnWithoutSliceConversion(t *testing.T) {
 	require.Equal(t, []uint8{0, 0}, nulls)
 	require.Same(t, &values[0][0], &col.borrowed.RowBytes(0)[0])
 	require.Same(t, &values[1][0], &col.borrowed.RowBytes(1)[0])
+
+	values[0] = []byte("other")
+	require.Equal(t, "first", col.Row(0, false))
 }
 
 func TestStringResetReleasesBorrowedValues(t *testing.T) {

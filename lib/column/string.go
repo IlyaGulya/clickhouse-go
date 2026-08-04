@@ -34,10 +34,14 @@ const (
 // Do not change the data until the batch Send returns.
 // If you do not send the batch, do not change the data until Abort or Close returns.
 // A Native batch can keep the value for another Send.
+// Append records the current pointer and length.
+// BorrowedBytes(nil) encodes an empty String. It does not encode SQL NULL.
 type BorrowedBytes []byte
 
 // BorrowedBytesColumn contains a column of BorrowedBytes values.
-// A conversion from [][]byte does not copy the slice or its values.
+// A conversion from [][]byte does not allocate.
+// Append records each element slice header but does not copy its bytes.
+// A later replacement or reslice of an element does not change the appended value.
 type BorrowedBytesColumn [][]byte
 
 func (col *String) Reset() {

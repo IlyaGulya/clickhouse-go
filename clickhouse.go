@@ -21,12 +21,12 @@ import (
 type Conn = driver.Conn
 
 type (
-	Progress       = proto.Progress
-	Exception      = proto.Exception
-	ProfileInfo    = proto.ProfileInfo
-	ServerVersion  = proto.ServerHandshake
-	BorrowedBytes  = column.BorrowedBytes
-	BorrowedColumn = column.BorrowedBytesColumn
+	Progress             = proto.Progress
+	Exception            = proto.Exception
+	ProfileInfo          = proto.ProfileInfo
+	ServerVersion        = proto.ServerHandshake
+	BorrowedBytes        = column.BorrowedBytes
+	BorrowedStringColumn = column.BorrowedBytesColumn
 )
 
 // BorrowBytes marks v as caller-owned String data.
@@ -36,16 +36,21 @@ type (
 // Use []byte if you cannot keep v unchanged for this period.
 // A Native batch keeps appended values for another Send.
 // Each Send reads the current data in v.
+// Append records the current pointer and length of v.
+// A later assignment or reslice of v does not change the appended value.
+// BorrowBytes(nil) encodes an empty String. It does not encode SQL NULL.
 func BorrowBytes(v []byte) BorrowedBytes {
 	return BorrowedBytes(v)
 }
 
-// BorrowBytesColumn marks all values in a String column as caller-owned.
-// It does not copy the [][]byte slice or its values.
+// BorrowBytesColumn marks the byte data in v as caller-owned String data.
+// The conversion does not allocate.
 // Pass the result to Batch.Column(i).Append.
+// Append records each element slice header but does not copy its bytes.
+// A later replacement or reslice of an element in v does not change the appended value.
 // The lifetime rules for BorrowBytes also apply.
-func BorrowBytesColumn(v [][]byte) BorrowedColumn {
-	return BorrowedColumn(v)
+func BorrowBytesColumn(v [][]byte) BorrowedStringColumn {
+	return BorrowedStringColumn(v)
 }
 
 var (
