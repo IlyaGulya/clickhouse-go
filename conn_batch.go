@@ -81,9 +81,10 @@ type batch struct {
 	ctx          context.Context
 	query        string
 	conn         *connect
-	sent         bool // sent signalize that batch is send to ClickHouse.
-	released     bool // released signalize that conn was returned to pool and can't be used.
-	closeOnFlush bool // closeOnFlush signalize that batch should close query and release conn when use Flush
+	sent         bool // sent shows that the batch was sent or finalized.
+	finalized    bool // finalized prevents a new Send.
+	released     bool // released shows that the connection was returned to the pool.
+	closeOnFlush bool // closeOnFlush closes the query and releases the connection after Flush.
 	block        *proto.Block
 	connRelease  func(*connect, error)
 	connAcquire  func(context.Context) (*connect, error)
@@ -98,11 +99,15 @@ func (b *batch) release(err error) {
 }
 
 func (b *batch) Abort() error {
-	defer func() {
-		b.sent = true
-		b.release(os.ErrProcessDone)
-	}()
-	if b.sent {
+	if b.finalized {
+		return ErrBatchAlreadySent
+	}
+	alreadySent := b.sent
+	b.finalized = true
+	b.sent = true
+	b.block.Reset()
+	b.release(os.ErrProcessDone)
+	if alreadySent {
 		return ErrBatchAlreadySent
 	}
 	return nil
@@ -199,6 +204,9 @@ func (b *batch) Column(idx int) driver.BatchColumn {
 }
 
 func (b *batch) Send() (err error) {
+	if b.finalized {
+		return ErrBatchAlreadySent
+	}
 	stopCW := contextWatchdog(b.ctx, func() {
 		// close TCP connection on context cancel. There is no other way simple way to interrupt underlying operations.
 		// as verified in the test, this is safe to do and cleanups resources later on
@@ -317,11 +325,11 @@ func (b *batch) closeQuery() error {
 // This should be called via defer after a batch is opened to prevent
 // batches from falling out of scope and timing out.
 func (b *batch) Close() error {
-	if b.sent {
+	if b.finalized {
 		return nil
 	}
+	b.finalized = true
 	b.sent = true
-	b.err = ErrBatchAlreadySent
 	defer b.block.Reset()
 	if b.released {
 		return nil

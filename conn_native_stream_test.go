@@ -121,6 +121,51 @@ func TestBatchCloseFinalizesAfterShortWrite(t *testing.T) {
 	require.Zero(t, acquireCalls)
 }
 
+func TestBatchAbortFinalizesBorrowedBlock(t *testing.T) {
+	payload := []byte("payload")
+	batch, acquireCalls := newBorrowedLifecycleBatch(t, payload)
+
+	require.NoError(t, batch.Abort())
+	payload[0] = 'X'
+	require.True(t, batch.IsSent())
+	require.Zero(t, batch.block.Rows())
+	require.ErrorIs(t, batch.Send(), ErrBatchAlreadySent)
+	require.Zero(t, *acquireCalls)
+}
+
+func TestBatchCloseAfterSendPreventsResend(t *testing.T) {
+	payload := []byte("payload")
+	batch, acquireCalls := newBorrowedLifecycleBatch(t, payload)
+	batch.sent = true
+	batch.released = true
+
+	require.NoError(t, batch.Close())
+	payload[0] = 'X'
+	require.True(t, batch.IsSent())
+	require.Zero(t, batch.block.Rows())
+	require.ErrorIs(t, batch.Send(), ErrBatchAlreadySent)
+	require.Zero(t, *acquireCalls)
+}
+
+func newBorrowedLifecycleBatch(t *testing.T, payload []byte) (*batch, *int) {
+	t.Helper()
+	block := proto.NewBlock()
+	require.NoError(t, block.AddColumn("value", column.Type("String")))
+	require.NoError(t, block.Append(column.BorrowedBytes(payload)))
+	acquireCalls := 0
+	return &batch{
+		ctx:   context.Background(),
+		conn:  newShortWriteConnect(new(recordingNetConn)),
+		block: block,
+		connRelease: func(*connect, error) {
+		},
+		connAcquire: func(context.Context) (*connect, error) {
+			acquireCalls++
+			return nil, errors.New("unexpected connection request")
+		},
+	}, &acquireCalls
+}
+
 func newShortWriteConnect(transport *recordingNetConn) *connect {
 	return &connect{
 		conn:        transport,
