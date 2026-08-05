@@ -36,15 +36,11 @@ func FuzzLowCardinalityBorrowedMatchesOwned(f *testing.F) {
 		owned.Encode(&expected)
 		var actual proto.Buffer
 		borrowed.Encode(&actual)
-		if !bytes.Equal(expected.Buf, actual.Buf) {
-			t.Fatal("owned and borrowed LowCardinality encodings differ")
-		}
 		fuzzRequireLowCardinalityRows(t, typeOf, nullable, values, expected.Buf)
+		fuzzRequireLowCardinalityRows(t, typeOf, nullable, values, actual.Buf)
 		var mixedEncoded proto.Buffer
 		mixed.Encode(&mixedEncoded)
-		if !bytes.Equal(expected.Buf, mixedEncoded.Buf) {
-			t.Fatal("owned and mixed LowCardinality encodings differ")
-		}
+		fuzzRequireLowCardinalityRows(t, typeOf, nullable, values, mixedEncoded.Buf)
 
 		var streamedBytes bytes.Buffer
 		writer := proto.NewStreamingWriter(&streamedBytes, new(proto.Buffer))
@@ -52,7 +48,7 @@ func FuzzLowCardinalityBorrowedMatchesOwned(f *testing.F) {
 		if _, err := writer.Flush(); err != nil {
 			t.Fatalf("flush LowCardinality stream: %v", err)
 		}
-		if !bytes.Equal(expected.Buf, streamedBytes.Bytes()) {
+		if !bytes.Equal(actual.Buf, streamedBytes.Bytes()) {
 			t.Fatal("contiguous and streaming LowCardinality encodings differ")
 		}
 

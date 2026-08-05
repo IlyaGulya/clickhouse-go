@@ -14,16 +14,29 @@ func TestLowCardinalityBorrowedString(t *testing.T) {
 	require.NoError(t, err)
 	lc := col.(*LowCardinality)
 
-	first := BorrowedBytes("payload")
-	second := BorrowedBytes("payload")
+	first := BorrowedBytes([]byte("payload"))
+	second := BorrowedBytes([]byte("payload"))
 	require.NoError(t, lc.AppendRow(first))
 	require.NoError(t, lc.AppendRow(second))
 	require.Equal(t, 2, lc.Rows())
-	require.Len(t, lc.append.stringIndex, 1)
+	require.Len(t, lc.append.borrowedIndex, 2)
 
 	index := lc.index.(*String)
-	require.Equal(t, 2, index.Rows())
+	require.Equal(t, 3, index.Rows())
 	require.Same(t, &first[0], &index.borrowed.RowBytes(1)[0])
+	require.Same(t, &second[0], &index.borrowed.RowBytes(2)[0])
+	require.Equal(t, []int{1, 2}, lc.append.keys)
+}
+
+func TestLowCardinalityBorrowedStringDeduplicatesSourceIdentity(t *testing.T) {
+	col, err := Type("LowCardinality(String)").Column("test", nil)
+	require.NoError(t, err)
+	lc := col.(*LowCardinality)
+
+	value := BorrowedBytes([]byte("payload"))
+	require.NoError(t, lc.AppendRow(value))
+	require.NoError(t, lc.AppendRow(value))
+	require.Equal(t, 2, lc.index.Rows())
 	require.Equal(t, []int{1, 1}, lc.append.keys)
 }
 
@@ -34,10 +47,9 @@ func TestLowCardinalityBorrowedStringDoesNotRetainEmptyBackingArray(t *testing.T
 
 	value := BorrowedBytes(make([]byte, 0, 1<<20))
 	require.NoError(t, lc.AppendRow(value))
-	require.Len(t, lc.append.stringIndex, 1)
-	for _, entries := range lc.append.stringIndex {
-		require.Len(t, entries, 1)
-		require.Nil(t, entries[0].bytes)
+	require.Len(t, lc.append.borrowedIndex, 1)
+	for source := range lc.append.borrowedIndex {
+		require.Nil(t, source.data)
 	}
 }
 
@@ -55,15 +67,15 @@ func TestLowCardinalityBorrowedStringSupportsMixedOwnership(t *testing.T) {
 	require.Equal(t, "owned", lc.Row(1, false))
 }
 
-func TestLowCardinalityMixedOwnershipDeduplicatesDictionary(t *testing.T) {
+func TestLowCardinalityMixedOwnershipUsesSeparateDictionaryEntries(t *testing.T) {
 	col, err := Type("LowCardinality(String)").Column("test", nil)
 	require.NoError(t, err)
 	lc := col.(*LowCardinality)
 
 	require.NoError(t, lc.AppendRow(BorrowedBytes("same")))
 	require.NoError(t, lc.AppendRow("same"))
-	require.Equal(t, 2, lc.index.Rows())
-	require.Equal(t, []int{1, 1}, lc.append.keys)
+	require.Equal(t, 3, lc.index.Rows())
+	require.Equal(t, []int{1, 2}, lc.append.keys)
 }
 
 func TestLowCardinalityAppendBorrowedBytesColumn(t *testing.T) {
@@ -76,7 +88,7 @@ func TestLowCardinalityAppendBorrowedBytesColumn(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []uint8{0, 0, 0}, nulls)
 	require.Equal(t, 3, lc.Rows())
-	require.Equal(t, 3, lc.index.Rows())
+	require.Equal(t, 4, lc.index.Rows())
 }
 
 func TestLowCardinalityWriteMatchesEncode(t *testing.T) {

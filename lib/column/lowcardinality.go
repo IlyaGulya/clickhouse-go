@@ -1,7 +1,6 @@
 package column
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"hash/maphash"
@@ -50,19 +49,23 @@ type LowCardinality struct {
 	keys64 UInt64
 
 	append struct {
-		keys        []int
-		index       map[any]int
-		stringIndex map[uint64][]lowCardinalityStringEntry
-		hashSeed    maphash.Seed
+		keys          []int
+		index         map[any]int
+		stringIndex   map[uint64][]lowCardinalityStringEntry
+		borrowedIndex map[lowCardinalityBorrowedSource]int
+		hashSeed      maphash.Seed
 	}
 	name string
 }
 
 type lowCardinalityStringEntry struct {
-	borrowed bool
-	bytes    []byte
-	owned    string
-	index    int
+	owned string
+	index int
+}
+
+type lowCardinalityBorrowedSource struct {
+	data   *byte
+	length int
 }
 
 func (col *LowCardinality) Reset() {
@@ -74,6 +77,7 @@ func (col *LowCardinality) Reset() {
 	col.keys64.Reset()
 	col.append.index = make(map[any]int)
 	col.append.stringIndex = make(map[uint64][]lowCardinalityStringEntry)
+	col.append.borrowedIndex = make(map[lowCardinalityBorrowedSource]int)
 	col.append.keys = col.append.keys[:0]
 }
 
@@ -85,6 +89,7 @@ func (col *LowCardinality) parse(t Type, sc *ServerContext) (_ *LowCardinality, 
 	col.chType = t
 	col.append.index = make(map[any]int)
 	col.append.stringIndex = make(map[uint64][]lowCardinalityStringEntry)
+	col.append.borrowedIndex = make(map[lowCardinalityBorrowedSource]int)
 	col.append.hashSeed = maphash.MakeSeed()
 	if col.index, err = Type(t.params()).Column(col.name, sc); err != nil {
 		return nil, err
@@ -159,6 +164,9 @@ func (col *LowCardinality) AppendRow(v any) error {
 	if col.append.stringIndex == nil {
 		col.append.stringIndex = make(map[uint64][]lowCardinalityStringEntry)
 	}
+	if col.append.borrowedIndex == nil {
+		col.append.borrowedIndex = make(map[lowCardinalityBorrowedSource]int)
+	}
 	if col.index.Rows() == 0 { // init
 		if err := col.index.AppendRow(nil); err != nil {
 			return err
@@ -209,23 +217,20 @@ func (col *LowCardinality) appendBorrowed(value []byte) error {
 	if len(value) == 0 {
 		value = nil
 	}
-	hash := maphash.Bytes(col.append.hashSeed, value)
-	for _, entry := range col.append.stringIndex[hash] {
-		if entry.matchesBytes(value) {
-			col.appendKey(entry.index)
-			return nil
-		}
+	source := lowCardinalityBorrowedSource{length: len(value)}
+	if len(value) > 0 {
+		source.data = &value[0]
+	}
+	if index, ok := col.append.borrowedIndex[source]; ok {
+		col.appendKey(index)
+		return nil
 	}
 
 	if err := col.index.AppendRow(BorrowedBytes(value)); err != nil {
 		return err
 	}
 	index := col.index.Rows() - 1
-	col.append.stringIndex[hash] = append(col.append.stringIndex[hash], lowCardinalityStringEntry{
-		borrowed: true,
-		bytes:    value,
-		index:    index,
-	})
+	col.append.borrowedIndex[source] = index
 	col.appendKey(index)
 	return nil
 }
@@ -251,17 +256,7 @@ func (col *LowCardinality) appendOwnedString(value string) error {
 	return nil
 }
 
-func (entry lowCardinalityStringEntry) matchesBytes(value []byte) bool {
-	if entry.borrowed {
-		return bytes.Equal(entry.bytes, value)
-	}
-	return entry.owned == string(value)
-}
-
 func (entry lowCardinalityStringEntry) matchesString(value string) bool {
-	if entry.borrowed {
-		return string(entry.bytes) == value
-	}
 	return entry.owned == value
 }
 
@@ -375,7 +370,7 @@ func (col *LowCardinality) prepareKeys() Interface {
 }
 
 func (col *LowCardinality) stringIndexRows() int {
-	rows := 0
+	rows := len(col.append.borrowedIndex)
 	for _, entries := range col.append.stringIndex {
 		rows += len(entries)
 	}
@@ -386,6 +381,7 @@ func (col *LowCardinality) clearAppendState() {
 	col.append.keys = nil
 	col.append.index = nil
 	col.append.stringIndex = nil
+	col.append.borrowedIndex = nil
 }
 
 func (col *LowCardinality) ReadStatePrefix(reader *proto.Reader) error {

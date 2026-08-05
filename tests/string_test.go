@@ -26,6 +26,9 @@ func TestBorrowedString(t *testing.T) {
 			Method: clickhouse.CompressionLZ4,
 		})
 		require.NoError(t, err)
+		t.Cleanup(func() {
+			require.NoError(t, conn.Close())
+		})
 
 		ctx := context.Background()
 		const ddl = `
@@ -165,6 +168,9 @@ func TestBorrowedStringMixedAndColumnar(t *testing.T) {
 			Method: clickhouse.CompressionLZ4,
 		})
 		require.NoError(t, err)
+		t.Cleanup(func() {
+			require.NoError(t, conn.Close())
+		})
 
 		ctx := context.Background()
 		const table = "test_borrowed_string_mixed"
@@ -235,6 +241,9 @@ func TestBorrowedStringMixedAndColumnar(t *testing.T) {
 func TestBorrowedStringUncompressedNative(t *testing.T) {
 	conn, err := GetNativeConnection(t, clickhouse.Native, nil, nil, nil)
 	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, conn.Close())
+	})
 
 	ctx := context.Background()
 	const table = "test_borrowed_string_uncompressed"
@@ -259,6 +268,9 @@ func TestBorrowedStringNativeFlushLifetime(t *testing.T) {
 		Method: clickhouse.CompressionLZ4,
 	})
 	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, conn.Close())
+	})
 
 	ctx := context.Background()
 	const table = "test_borrowed_string_native_flush_lifetime"
@@ -284,6 +296,51 @@ func TestBorrowedStringNativeFlushLifetime(t *testing.T) {
 		var value string
 		require.NoError(t, rows.Scan(&value))
 		require.Equal(t, want, value)
+	}
+	require.False(t, rows.Next())
+	require.NoError(t, rows.Err())
+}
+
+func TestBorrowedLowCardinalityNativeResend(t *testing.T) {
+	conn, err := GetNativeConnection(t, clickhouse.Native, nil, nil, &clickhouse.Compression{
+		Method: clickhouse.CompressionLZ4,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, conn.Close())
+	})
+
+	ctx := context.Background()
+	const table = "test_borrowed_low_cardinality_native_resend"
+	require.NoError(t, conn.Exec(ctx, "CREATE TABLE "+table+" (value LowCardinality(String)) Engine MergeTree() ORDER BY tuple()"))
+	t.Cleanup(func() {
+		require.NoError(t, conn.Exec(ctx, "DROP TABLE IF EXISTS "+table))
+	})
+
+	first := []byte("same")
+	second := []byte("same")
+	batch, err := conn.PrepareBatch(ctx, "INSERT INTO "+table)
+	require.NoError(t, err)
+	require.NoError(t, batch.Append(clickhouse.BorrowBytes(first)))
+	require.NoError(t, batch.Append(clickhouse.BorrowBytes(second)))
+	require.NoError(t, batch.Send())
+	second[0] = 'X'
+	require.NoError(t, batch.Send())
+
+	rows, err := conn.Query(ctx, "SELECT value, count() FROM "+table+" GROUP BY value ORDER BY value")
+	require.NoError(t, err)
+	defer rows.Close()
+	want := []struct {
+		value string
+		count uint64
+	}{{"Xame", 1}, {"same", 3}}
+	for _, expected := range want {
+		require.True(t, rows.Next())
+		var value string
+		var count uint64
+		require.NoError(t, rows.Scan(&value, &count))
+		require.Equal(t, expected.value, value)
+		require.Equal(t, expected.count, count)
 	}
 	require.False(t, rows.Next())
 	require.NoError(t, rows.Err())
