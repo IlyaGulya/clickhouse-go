@@ -53,8 +53,15 @@ func FuzzLowCardinalityBorrowedMatchesOwned(f *testing.F) {
 		}
 
 		borrowed.Reset()
-		if borrowed.Rows() != 0 || len(borrowed.append.stringIndex) != 0 {
+		if borrowed.Rows() != 0 || len(borrowed.append.index) != 0 || len(borrowed.append.borrowedIndex) != 0 {
 			t.Fatal("reset retained borrowed LowCardinality state")
+		}
+		stringColumn := borrowed.index
+		if nullableColumn, ok := stringColumn.(*Nullable); ok {
+			stringColumn = nullableColumn.Base()
+		}
+		if len(stringColumn.(*String).borrowed.Values) != 0 {
+			t.Fatal("reset retained borrowed LowCardinality values")
 		}
 	})
 }
