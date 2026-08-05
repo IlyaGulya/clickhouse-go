@@ -194,7 +194,8 @@ func encodeBenchmarkBlock(block *proto.Block, encoder string) (retained int64, w
 			return 0, 0, err
 		}
 		buffer.Buf = append(buffer.Buf[:0], compressor.Data...)
-		return int64(cap(buffer.Buf)), int64(len(buffer.Buf)), nil
+		retained := cap(buffer.Buf) + cap(compressor.Data)
+		return int64(retained), int64(len(buffer.Buf)), nil
 	case "NativeStreaming":
 		conn := &connect{
 			buffer:               new(chproto.Buffer),
@@ -206,7 +207,8 @@ func encodeBenchmarkBlock(block *proto.Block, encoder string) (retained int64, w
 		if err := conn.writeCompressedBlock(block); err != nil {
 			return 0, 0, err
 		}
-		return int64(cap(conn.buffer.Buf)), int64(len(conn.buffer.Buf)), nil
+		retained := cap(conn.buffer.Buf) + cap(conn.compressor.Data)
+		return int64(retained), int64(len(conn.buffer.Buf)), nil
 	case "HTTPStreaming":
 		conn := &httpConnect{
 			compression:     CompressionLZ4,
@@ -216,7 +218,7 @@ func encodeBenchmarkBlock(block *proto.Block, encoder string) (retained int64, w
 		if err := conn.writeDataTo(counter, block); err != nil {
 			return 0, 0, err
 		}
-		return 0, int64(*counter), nil
+		return int64(cap(conn.blockCompressor.Data)), int64(*counter), nil
 	default:
 		return 0, 0, fmt.Errorf("unknown benchmark encoder %q", encoder)
 	}
