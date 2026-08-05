@@ -40,8 +40,8 @@ func TestCompositeColumnsPreserveStreamingWrites(t *testing.T) {
 			name:   "MapString",
 			typeOf: "Map(String, String)",
 			rows: []any{
-				map[string]string{"first": "payload-first"},
-				map[string]string{"second": "payload-second"},
+				newBorrowedOrderedMap("first", BorrowedBytes("payload-first")),
+				newBorrowedOrderedMap("second", BorrowedBytes("payload-second")),
 			},
 		},
 		{
@@ -70,6 +70,45 @@ func TestCompositeColumnsPreserveStreamingWrites(t *testing.T) {
 			requireColumnWriteMatchesEncode(t, col)
 		})
 	}
+}
+
+type borrowedOrderedMap struct {
+	entries []borrowedOrderedMapEntry
+}
+
+type borrowedOrderedMapEntry struct {
+	key   any
+	value any
+}
+
+type borrowedOrderedMapIterator struct {
+	entries []borrowedOrderedMapEntry
+	index   int
+}
+
+func newBorrowedOrderedMap(key, value any) *borrowedOrderedMap {
+	return &borrowedOrderedMap{entries: []borrowedOrderedMapEntry{{key: key, value: value}}}
+}
+
+func (m *borrowedOrderedMap) Put(key, value any) {
+	m.entries = append(m.entries, borrowedOrderedMapEntry{key: key, value: value})
+}
+
+func (m *borrowedOrderedMap) Iterator() MapIterator {
+	return &borrowedOrderedMapIterator{entries: m.entries, index: -1}
+}
+
+func (i *borrowedOrderedMapIterator) Next() bool {
+	i.index++
+	return i.index < len(i.entries)
+}
+
+func (i *borrowedOrderedMapIterator) Key() any {
+	return i.entries[i.index].key
+}
+
+func (i *borrowedOrderedMapIterator) Value() any {
+	return i.entries[i.index].value
 }
 
 func requireColumnWriteMatchesEncode(t *testing.T, col Interface) {

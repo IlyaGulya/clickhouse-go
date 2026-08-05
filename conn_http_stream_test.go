@@ -75,6 +75,14 @@ func TestHTTPWriteDataToPropagatesDestinationFailure(t *testing.T) {
 }
 
 func TestHTTPBatchCancellationWaitsForBorrowedProducer(t *testing.T) {
+	for _, method := range []CompressionMethod{CompressionNone, CompressionLZ4} {
+		t.Run(method.String(), func(t *testing.T) {
+			testHTTPBatchCancellationWaitsForBorrowedProducer(t, method)
+		})
+	}
+}
+
+func testHTTPBatchCancellationWaitsForBorrowedProducer(t *testing.T, method CompressionMethod) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -89,7 +97,7 @@ func TestHTTPBatchCancellationWaitsForBorrowedProducer(t *testing.T) {
 		<-req.Context().Done()
 		return nil, req.Context().Err()
 	})
-	compressionPool, err := createCompressionPool(&Compression{Method: CompressionNone})
+	compressionPool, err := createCompressionPool(&Compression{Method: method})
 	require.NoError(t, err)
 	endpoint, err := url.Parse("http://clickhouse.invalid/")
 	require.NoError(t, err)
@@ -98,8 +106,9 @@ func TestHTTPBatchCancellationWaitsForBorrowedProducer(t *testing.T) {
 		opt:             &Options{},
 		url:             endpoint,
 		client:          &http.Client{Transport: transport},
-		compression:     CompressionNone,
+		compression:     method,
 		compressionPool: compressionPool,
+		blockCompressor: compress.NewWriter(compress.LevelZero, compress.Method(method)),
 	}
 	payload := bytes.Repeat([]byte("borrowed payload"), 1<<18)
 	block := proto.NewBlock()

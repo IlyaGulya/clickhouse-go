@@ -254,6 +254,41 @@ func TestBorrowedStringUncompressedNative(t *testing.T) {
 	require.True(t, bytes.Equal(payload, actual))
 }
 
+func TestBorrowedStringNativeFlushLifetime(t *testing.T) {
+	conn, err := GetNativeConnection(t, clickhouse.Native, nil, nil, &clickhouse.Compression{
+		Method: clickhouse.CompressionLZ4,
+	})
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	const table = "test_borrowed_string_native_flush_lifetime"
+	require.NoError(t, conn.Exec(ctx, "CREATE TABLE "+table+" (sequence UInt8, value String) Engine MergeTree() ORDER BY sequence"))
+	t.Cleanup(func() {
+		require.NoError(t, conn.Exec(ctx, "DROP TABLE IF EXISTS "+table))
+	})
+
+	payload := []byte("first")
+	batch, err := conn.PrepareBatch(ctx, "INSERT INTO "+table)
+	require.NoError(t, err)
+	require.NoError(t, batch.Append(uint8(1), clickhouse.BorrowBytes(payload)))
+	require.NoError(t, batch.Flush())
+	payload[0] = 'X'
+	require.NoError(t, batch.Append(uint8(2), clickhouse.BorrowBytes([]byte("second"))))
+	require.NoError(t, batch.Send())
+
+	rows, err := conn.Query(ctx, "SELECT value FROM "+table+" ORDER BY sequence")
+	require.NoError(t, err)
+	defer rows.Close()
+	for _, want := range []string{"first", "second"} {
+		require.True(t, rows.Next())
+		var value string
+		require.NoError(t, rows.Scan(&value))
+		require.Equal(t, want, value)
+	}
+	require.False(t, rows.Next())
+	require.NoError(t, rows.Err())
+}
+
 func makeBorrowedRandomPayload(size int) []byte {
 	payload := make([]byte, size)
 	state := uint64(0x9e3779b97f4a7c15)

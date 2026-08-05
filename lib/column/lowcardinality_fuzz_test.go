@@ -39,6 +39,7 @@ func FuzzLowCardinalityBorrowedMatchesOwned(f *testing.F) {
 		if !bytes.Equal(expected.Buf, actual.Buf) {
 			t.Fatal("owned and borrowed LowCardinality encodings differ")
 		}
+		fuzzRequireLowCardinalityRows(t, typeOf, nullable, values, expected.Buf)
 		var mixedEncoded proto.Buffer
 		mixed.Encode(&mixedEncoded)
 		if !bytes.Equal(expected.Buf, mixedEncoded.Buf) {
@@ -60,6 +61,40 @@ func FuzzLowCardinalityBorrowedMatchesOwned(f *testing.F) {
 			t.Fatal("reset retained borrowed LowCardinality state")
 		}
 	})
+}
+
+func fuzzRequireLowCardinalityRows(t *testing.T, typeOf Type, nullable bool, values []fuzzLowCardinalityValue, encoded []byte) {
+	t.Helper()
+	column, err := typeOf.Column("value", nil)
+	if err != nil {
+		t.Fatalf("create decoded LowCardinality column: %v", err)
+	}
+	decoded := column.(*LowCardinality)
+	if err := decoded.Decode(proto.NewReader(bytes.NewReader(encoded)), len(values)); err != nil {
+		t.Fatalf("decode LowCardinality column: %v", err)
+	}
+	for i, value := range values {
+		got := decoded.Row(i, false)
+		if nullable && value.isNull {
+			if got != nil {
+				t.Fatalf("row %d: got %v, want NULL", i, got)
+			}
+			continue
+		}
+		want := string(value.value)
+		var gotString string
+		switch got := got.(type) {
+		case string:
+			gotString = got
+		case *string:
+			gotString = *got
+		default:
+			t.Fatalf("row %d: got type %T, want String", i, got)
+		}
+		if gotString != want {
+			t.Fatalf("row %d: got %q, want %q", i, gotString, want)
+		}
+	}
 }
 
 func fuzzLowCardinalityMixedColumn(t *testing.T, typeOf Type, values []fuzzLowCardinalityValue) *LowCardinality {
