@@ -214,13 +214,6 @@ func (c *connect) isClosed() bool {
 	return c.closed
 }
 
-func (c *connect) setClosed() {
-	c.closeMutex.Lock()
-	defer c.closeMutex.Unlock()
-
-	c.closed = true
-}
-
 func (c *connect) close() error {
 	c.closeMutex.Lock()
 	if c.closed {

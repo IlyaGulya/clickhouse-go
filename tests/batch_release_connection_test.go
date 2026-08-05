@@ -38,7 +38,10 @@ func TestBatchReleaseConnection(t *testing.T) {
 	require.NoError(t, batch.Send())
 	require.Equal(t, uint64(1), getRowsCount(t, conn, tableName))
 
-	require.ErrorIs(t, batch.Send(), clickhouse.ErrBatchAlreadySent)
+	require.NoError(t, batch.Send())
+	require.Equal(t, uint64(2), getRowsCount(t, conn, tableName))
+
+	require.NoError(t, conn.Exec(ctx, `OPTIMIZE TABLE test_release_connection DEDUPLICATE`))
 	require.Equal(t, uint64(1), getRowsCount(t, conn, tableName))
 }
 

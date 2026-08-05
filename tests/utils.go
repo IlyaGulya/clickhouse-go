@@ -817,10 +817,6 @@ func getRowsCount(t *testing.T, conn driver.Conn, table string) uint64 {
 	return count
 }
 
-func deduplicateTable(t *testing.T, conn driver.Conn, table string) {
-	require.NoError(t, conn.Exec(context.Background(), fmt.Sprintf(`OPTIMIZE TABLE %s DEDUPLICATE`, table)))
-}
-
 func GetEnv(key, fallback string) string {
 	if value, ok := os.LookupEnv(key); ok {
 		return value
