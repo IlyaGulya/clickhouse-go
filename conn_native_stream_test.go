@@ -93,6 +93,34 @@ func TestBatchFlushReleasesConnectionAfterShortWrite(t *testing.T) {
 	require.Len(t, transport.writeSizes, writes)
 }
 
+func TestBatchCloseFinalizesAfterShortWrite(t *testing.T) {
+	transport := &recordingNetConn{shortWrite: true}
+	conn := newShortWriteConnect(transport)
+	payload := []byte("payload")
+	block := proto.NewBlock()
+	require.NoError(t, block.AddColumn("value", column.Type("String")))
+	require.NoError(t, block.Append(column.BorrowedBytes(payload)))
+	acquireCalls := 0
+	batch := &batch{
+		ctx:   context.Background(),
+		conn:  conn,
+		block: block,
+		connRelease: func(*connect, error) {
+		},
+		connAcquire: func(context.Context) (*connect, error) {
+			acquireCalls++
+			return nil, errors.New("unexpected connection request")
+		},
+	}
+
+	require.ErrorIs(t, batch.Flush(), io.ErrShortWrite)
+	require.NoError(t, batch.Close())
+	require.True(t, batch.IsSent())
+	require.Zero(t, block.Rows())
+	require.ErrorIs(t, batch.Send(), ErrBatchAlreadySent)
+	require.Zero(t, acquireCalls)
+}
+
 func newShortWriteConnect(transport *recordingNetConn) *connect {
 	return &connect{
 		conn:        transport,
