@@ -132,6 +132,9 @@ type connect struct {
 	compression          CompressionMethod
 	connectedAt          time.Time
 	compressor           *compress.Writer
+	compressionStream    *compress.StreamWriter
+	compressionWriter    *chproto.Writer
+	compressionBuffer    chproto.Buffer
 	readTimeout          time.Duration
 	blockBufferSize      uint8
 	maxCompressionBuffer int
@@ -344,16 +347,20 @@ func (c *connect) writeUncompressedBlock(block *proto.Block) error {
 }
 
 func (c *connect) writeCompressedBlock(block *proto.Block) error {
-	stream := compress.NewStreamWriter(compressedBlockSink{connect: c}, c.compressor)
-	writer := chproto.NewStreamingWriter(stream, new(chproto.Buffer))
+	if c.compressionStream == nil {
+		c.compressionStream = compress.NewStreamWriter(compressedBlockSink{connect: c}, c.compressor)
+	}
+	if c.compressionWriter == nil {
+		c.compressionWriter = chproto.NewStreamingWriter(c.compressionStream, &c.compressionBuffer)
+	}
 
-	if err := block.Write(writer, c.revision); err != nil {
+	if err := block.Write(c.compressionWriter, c.revision); err != nil {
 		return fmt.Errorf("send data: failed to encode block (conn_id=%d): %w", c.id, err)
 	}
-	if _, err := writer.Flush(); err != nil {
+	if _, err := c.compressionWriter.Flush(); err != nil {
 		return fmt.Errorf("send data: failed to stream block (conn_id=%d): %w", c.id, err)
 	}
-	if err := stream.Flush(); err != nil {
+	if err := c.compressionStream.Flush(); err != nil {
 		return fmt.Errorf("send data: failed to flush compressed block (conn_id=%d): %w", c.id, err)
 	}
 	return nil

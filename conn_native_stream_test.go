@@ -241,6 +241,42 @@ func TestWriteCompressedBlockPropagatesConnectionFailure(t *testing.T) {
 	require.ErrorIs(t, err, writeErr)
 }
 
+func TestWriteCompressedBlockReusesStreamingWriters(t *testing.T) {
+	transport := new(recordingNetConn)
+	conn := &connect{
+		conn:                 transport,
+		buffer:               new(chproto.Buffer),
+		compressor:           compress.NewWriter(compress.LevelZero, compress.ZSTD),
+		compression:          CompressionZSTD,
+		revision:             ClientTCPProtocolVersion,
+		maxCompressionBuffer: int(^uint(0) >> 1),
+	}
+	block := newStringBlock(t)
+
+	require.NoError(t, conn.writeCompressedBlock(block))
+	require.NotNil(t, conn.compressionStream)
+	require.NotNil(t, conn.compressionWriter)
+	firstStream := conn.compressionStream
+	firstWriter := conn.compressionWriter
+
+	require.NoError(t, conn.writeCompressedBlock(block))
+	require.Same(t, firstStream, conn.compressionStream)
+	require.Same(t, firstWriter, conn.compressionWriter)
+
+	var encoded chproto.Buffer
+	require.NoError(t, block.Encode(&encoded, ClientTCPProtocolVersion))
+	expected := append(append([]byte(nil), encoded.Buf...), encoded.Buf...)
+	reader := compress.NewReader(bytes.NewReader(conn.buffer.Buf))
+	decoded := make([]byte, len(expected))
+	_, err := io.ReadFull(reader, decoded)
+	require.NoError(t, err)
+	require.Equal(t, expected, decoded)
+	trailing := make([]byte, 1)
+	n, err := reader.Read(trailing)
+	require.Zero(t, n)
+	require.Error(t, err)
+}
+
 type recordingNetConn struct {
 	mockNetConn
 	writeSizes []int
